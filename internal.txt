@@ -1,0 +1,165 @@
+#include "pch.h"
+#include <Windows.h>
+#include <thread>
+#include <cstdint>
+#include <random>
+
+// --- Оффсеты движка ---
+namespace client_dll {
+    constexpr std::ptrdiff_t dwEntityList = 0x2554050;
+    constexpr std::ptrdiff_t dwLocalPlayerPawn = 0x23A9118;
+    constexpr std::ptrdiff_t dwViewAngles = 0x23BF1A8;
+}
+
+// --- Оффсеты из дампа ---
+namespace schema {
+    constexpr std::ptrdiff_t m_iHealth = 0x34C;
+    constexpr std::ptrdiff_t m_iTeamNum = 0x3E7;
+    constexpr std::ptrdiff_t m_fFlags = 0x3F4;
+    constexpr std::ptrdiff_t m_aimPunchAngle = 0x14CC;
+    constexpr std::ptrdiff_t m_pClippingWeapon = 0x1308;
+    constexpr std::ptrdiff_t m_iClip1 = 0x15A4;
+    constexpr std::ptrdiff_t m_bInReload = 0x1704;
+}
+
+struct Vector2 { float x, y; };
+
+// Глобальные флаги
+bool bAntiAimbot = false;
+bool bAntiAimless = false;
+bool bVisualRecoil = false;
+bool bAntiBhop = false;
+bool bGamesense = false;
+
+int previousAmmo = -1;
+Vector2 oldPunch = { 0.0f, 0.0f };
+
+// Макросы для безопасного чтения/записи (решает ошибку E0029)
+#define READ_MEM(type, addr) (*(type*)(addr))
+#define WRITE_MEM(type, addr, val) (*(type*)(addr) = (val))
+
+void HackThread(HMODULE hModule) {
+    uintptr_t clientBase = (uintptr_t)GetModuleHandle(L"client.dll");
+    while (!clientBase) {
+        clientBase = (uintptr_t)GetModuleHandle(L"client.dll");
+        Sleep(100);
+    }
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dropChance(1, 100);
+    std::uniform_real_distribution<float> randAim(-15.0f, 15.0f);
+
+    while (!GetAsyncKeyState(VK_END)) {
+        Sleep(1);
+
+        if (GetAsyncKeyState(VK_F1) & 1) bAntiAimbot = !bAntiAimbot;
+        if (GetAsyncKeyState(VK_F2) & 1) bAntiAimless = !bAntiAimless;
+        if (GetAsyncKeyState(VK_F3) & 1) bVisualRecoil = !bVisualRecoil;
+        if (GetAsyncKeyState(VK_F4) & 1) bAntiBhop = !bAntiBhop;
+
+        uintptr_t localPlayer = READ_MEM(uintptr_t, clientBase + client_dll::dwLocalPlayerPawn);
+        if (!localPlayer) continue;
+
+        int health = READ_MEM(int, localPlayer + schema::m_iHealth);
+        if (health <= 0) continue;
+
+        // 1. АНТИБХОП
+        if (bAntiBhop && (GetAsyncKeyState(VK_SPACE) & 0x8000)) {
+            uint32_t flags = READ_MEM(uint32_t, localPlayer + schema::m_fFlags);
+            if (flags & 1) {
+                WRITE_MEM(uint32_t, localPlayer + schema::m_fFlags, flags & ~1);
+            }
+        }
+
+        // 2. GAMESENSE
+        if (!bGamesense) {
+            uintptr_t weaponHandle = READ_MEM(uintptr_t, localPlayer + schema::m_pClippingWeapon);
+            uintptr_t entityList = READ_MEM(uintptr_t, clientBase + client_dll::dwEntityList);
+
+            if (weaponHandle && entityList) {
+                uintptr_t listEntry = READ_MEM(uintptr_t, entityList + 0x10 + (8 * ((weaponHandle & 0x7FFF) >> 9)));
+                if (listEntry) {
+                    uintptr_t weapon = READ_MEM(uintptr_t, listEntry + 120 * (weaponHandle & 0x1FF));
+                    if (weapon) {
+                        int currentAmmo = READ_MEM(int, weapon + schema::m_iClip1);
+                        bool isReloading = READ_MEM(bool, weapon + schema::m_bInReload);
+
+                        if ((previousAmmo != -1 && currentAmmo < previousAmmo) || isReloading) {
+                            if (dropChance(gen) <= 20) {
+                                keybd_event('G', 0, 0, 0);
+                                keybd_event('G', 0, KEYEVENTF_KEYUP, 0);
+                                Sleep(300);
+                            }
+                        }
+                        previousAmmo = currentAmmo;
+                    }
+                }
+            }
+        }
+
+        // 3. VISUAL RECOIL
+        Vector2* viewAngles = (Vector2*)(clientBase + client_dll::dwViewAngles);
+        Vector2 punch = READ_MEM(Vector2, localPlayer + schema::m_aimPunchAngle);
+
+        if (bVisualRecoil) {
+            Vector2 newPunch = { punch.x * 4.0f, punch.y * 4.0f };
+            viewAngles->x -= (newPunch.x - oldPunch.x);
+            viewAngles->y -= (newPunch.y - oldPunch.y);
+            oldPunch = newPunch;
+        }
+        else {
+            oldPunch = { 0.0f, 0.0f };
+        }
+
+        // Нормализация
+        if (viewAngles->x > 89.0f) viewAngles->x = 89.0f;
+        if (viewAngles->x < -89.0f) viewAngles->x = -89.0f;
+        while (viewAngles->y > 180.0f) viewAngles->y -= 360.0f;
+        while (viewAngles->y < -180.0f) viewAngles->y += 360.0f;
+
+        // 4. ПАРСИНГ ВРАГОВ
+        if (bAntiAimbot || bAntiAimless) {
+            bool enemySpotted = false;
+            uintptr_t entityList = READ_MEM(uintptr_t, clientBase + client_dll::dwEntityList);
+            int localTeam = READ_MEM(int, localPlayer + schema::m_iTeamNum);
+
+            for (int i = 1; i < 64; i++) {
+                uintptr_t listEntry = READ_MEM(uintptr_t, entityList + ((8 * (i & 0x7FFF)) >> 9) + 16);
+                if (!listEntry) continue;
+
+                uintptr_t pawn = READ_MEM(uintptr_t, listEntry + 120 * (i & 0x1FF));
+                if (!pawn || pawn == localPlayer) continue;
+
+                int enemyHealth = READ_MEM(int, pawn + schema::m_iHealth);
+                int enemyTeam = READ_MEM(int, pawn + schema::m_iTeamNum);
+
+                if (enemyHealth > 0 && enemyTeam != localTeam) {
+                    enemySpotted = true;
+                    break;
+                }
+            }
+
+            if (enemySpotted) {
+                if (bAntiAimless) {
+                    viewAngles->x = 89.0f;
+                    viewAngles->y += 15.0f;
+                }
+                else if (bAntiAimbot) {
+                    viewAngles->x += randAim(gen);
+                    viewAngles->y += randAim(gen);
+                }
+            }
+        }
+    }
+
+    FreeLibraryAndExitThread(hModule, 0);
+}
+
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+    if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(hModule);
+        CreateThread(nullptr, 0, (LPTHREAD_START_ROUTINE)HackThread, hModule, 0, nullptr);
+    }
+    return TRUE;
+}
