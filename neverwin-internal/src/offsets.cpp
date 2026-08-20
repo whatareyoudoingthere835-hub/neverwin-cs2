@@ -1,0 +1,62 @@
+#include "pch.h"
+#include "offsets.hpp"
+
+namespace offsets {
+
+    Offsets g;
+
+    namespace {
+        const wchar_t* s_iniPath = nullptr;
+
+        // Читает ключ из секции [offsets] как hex. Если ключа нет, значение
+        // пустое или не hex — возвращает fallback (встроенное значение).
+        std::uintptr_t ReadHex(const wchar_t* key, std::uintptr_t fallback) {
+            if (!s_iniPath)
+                return fallback;
+
+            wchar_t buf[64]{};
+            const DWORD len = GetPrivateProfileStringW(L"offsets", key, L"", buf, 63, s_iniPath);
+            if (len == 0 || len >= 63)
+                return fallback;
+
+            wchar_t* end = nullptr;
+            const unsigned long long v = wcstoull(buf, &end, 16);
+            if (end == buf || *end != L'\0')
+                return fallback;
+
+            return static_cast<std::uintptr_t>(v);
+        }
+
+        // Модульные оффсеты указывают внутрь образов модулей, т.е. это
+        // миллионы байт. Всё, что меньше 0x400, отсекаем как мусор.
+        bool Plausible(std::uintptr_t v) { return v >= 0x400; }
+    }
+
+    bool LoadFromIni(const wchar_t* iniPath) {
+        s_iniPath = iniPath;
+        if (!iniPath || GetFileAttributesW(iniPath) == INVALID_FILE_ATTRIBUTES)
+            return false;
+
+        Offsets o;
+        o.dwEntityList      = ReadHex(L"dwEntityList",      o.dwEntityList);
+        o.dwLocalPlayerPawn = ReadHex(L"dwLocalPlayerPawn", o.dwLocalPlayerPawn);
+        o.dwViewAngles      = ReadHex(L"dwViewAngles",      o.dwViewAngles);
+        o.m_iHealth         = ReadHex(L"m_iHealth",         o.m_iHealth);
+        o.m_iTeamNum        = ReadHex(L"m_iTeamNum",        o.m_iTeamNum);
+        o.m_fFlags          = ReadHex(L"m_fFlags",          o.m_fFlags);
+        o.m_aimPunchAngle   = ReadHex(L"m_aimPunchAngle",   o.m_aimPunchAngle);
+        o.m_pClippingWeapon = ReadHex(L"m_pClippingWeapon", o.m_pClippingWeapon);
+        o.m_iClip1          = ReadHex(L"m_iClip1",          o.m_iClip1);
+        o.m_bInReload       = ReadHex(L"m_bInReload",       o.m_bInReload);
+        o.listEntryOffset   = ReadHex(L"listEntryOffset",   o.listEntryOffset);
+        o.entryStride       = ReadHex(L"entryStride",       o.entryStride);
+
+        // Главные модульные оффсеты обязаны быть правдоподобными, иначе
+        // ini мусорный — остаёмся на встроенных значениях.
+        if (!Plausible(o.dwEntityList) || !Plausible(o.dwLocalPlayerPawn) || !Plausible(o.dwViewAngles))
+            return false;
+
+        g = o;
+        return true;
+    }
+}

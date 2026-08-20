@@ -4,6 +4,7 @@
 #include "features.hpp"
 #include "gui.hpp"
 #include "log.hpp"
+#include "offsets.hpp"
 
 namespace {
 
@@ -16,6 +17,23 @@ namespace {
         nwlog::Init();
         NW_LOG(L"DLL загружена. Поток %lu, PID %lu.",
                GetCurrentThreadId(), GetCurrentProcessId());
+
+        // Ищем neverwin.ini рядом с DLL — в нём оффсеты от свежего дампа.
+        // Нет ini — работаем на встроенных (после патча Valve они стухшие).
+        wchar_t dllPath[MAX_PATH]{};
+        GetModuleFileNameW(hModule, dllPath, MAX_PATH);
+        std::wstring iniPath(dllPath);
+        const size_t slash = iniPath.find_last_of(L'\\');
+        iniPath = (slash == std::wstring::npos ? iniPath : iniPath.substr(0, slash + 1)) + L"neverwin.ini";
+
+        if (offsets::LoadFromIni(iniPath.c_str())) {
+            g_state.offsetsFromIni.store(true);
+            NW_LOG(L"оффсеты загружены из neverwin.ini: %s", iniPath.c_str());
+        } else {
+            g_state.offsetsFromIni.store(false);
+            NW_LOG(L"WARNING: neverwin.ini не найден или битый — использую ВСТРОЕННЫЕ оффсеты.");
+            NW_LOG(L"         после обновления CS2 сгенерируй ini заново (README, tools/dump_to_ini.py).");
+        }
 
         if (!gui::Init()) {
             NW_LOG(L"WARNING: хук Present не встал — работаем без меню.");

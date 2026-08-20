@@ -2,31 +2,43 @@
 #include <cstdint>
 
 // ============================================================================
-// ОФФСЕТЫ — ЕДИНСТВЕННОЕ МЕСТО, КОТОРОЕ НУЖНО ПРАВИТЬ ПОСЛЕ АПДЕЙТА CS2.
+// ОФФСЕТЫ.
 //
-// Значения взяты из дампа схем в internal.txt. CS2 обновляет бинарь почти
-// каждую неделю, и оффсеты устаревают. Если после обновления игры DLL
-// "ничего не делает" или падает — первым делом сверяй их со свежим дампом.
+// Встроенные значения — от последнего известного дампа схем. CS2 обновляется
+// почти каждую неделю, поэтому актуальные оффсеты грузятся из neverwin.ini,
+// лежащего рядом с DLL (секция [offsets], значения в hex). Если ini нет —
+// используются встроенные, и меню честно покажет "ВСТРОЕННЫЕ — обнови!".
+//
+// Как получить свежий ini после патча Valve — README и tools/dump_to_ini.py.
 // ============================================================================
 namespace offsets {
 
-    // --- client.dll ---
-    constexpr std::uintptr_t dwEntityList      = 0x2554050; // CGameEntitySystem::m_list
-    constexpr std::uintptr_t dwLocalPlayerPawn = 0x23A9118;
-    constexpr std::uintptr_t dwViewAngles      = 0x23BF1A8;
+    struct Offsets {
+        // --- client.dll ---
+        std::uintptr_t dwEntityList      = 0x2554050; // CGameEntitySystem::m_list
+        std::uintptr_t dwLocalPlayerPawn = 0x23A9118;
+        std::uintptr_t dwViewAngles      = 0x23BF1A8;
 
-    // --- схема C_CSPlayerPawnBase ---
-    constexpr std::uintptr_t m_iHealth         = 0x34C;
-    constexpr std::uintptr_t m_iTeamNum        = 0x3E7;
-    constexpr std::uintptr_t m_fFlags          = 0x3F4;  // бит 0 = FL_ONGROUND
-    constexpr std::uintptr_t m_aimPunchAngle   = 0x14CC; // QAngle (pitch, yaw)
-    constexpr std::uintptr_t m_pClippingWeapon = 0x1308; // CEntityHandle (u32)
-    constexpr std::uintptr_t m_iClip1          = 0x15A4;
-    constexpr std::uintptr_t m_bInReload       = 0x1704;
+        // --- схема C_CSPlayerPawnBase ---
+        std::uintptr_t m_iHealth         = 0x34C;
+        std::uintptr_t m_iTeamNum        = 0x3E7;
+        std::uintptr_t m_fFlags          = 0x3F4;  // бит 0 = FL_ONGROUND
+        std::uintptr_t m_aimPunchAngle   = 0x14CC; // QAngle (pitch, yaw)
+        std::uintptr_t m_pClippingWeapon = 0x1308; // CEntityHandle (u32)
+        std::uintptr_t m_iClip1          = 0x15A4;
+        std::uintptr_t m_bInReload       = 0x1704;
 
-    // --- устройство энтити-листа Source 2 ---
-    // listEntry = entityList + 0x10 + 8 * (index >> 9)
-    // element   = listEntry  + 0x78 * (index & 0x1FF)
-    constexpr std::uintptr_t listEntryOffset = 0x10;
-    constexpr std::uintptr_t entryStride     = 0x78; // 120 байт
+        // --- устройство энтити-листа Source 2 (меняется крайне редко) ---
+        // listEntry = entityList + 0x10 + 8 * (index >> 9)
+        // element   = listEntry  + 0x78 * (index & 0x1FF)
+        std::uintptr_t listEntryOffset = 0x10;
+        std::uintptr_t entryStride     = 0x78;
+    };
+
+    // Живые значения: встроенные по умолчанию, либо из neverwin.ini.
+    extern Offsets g;
+
+    // Читает секцию [offsets] из ini. Возвращает true, если файл прочитан
+    // и главные модульные оффсеты прошли базовую валидацию.
+    bool LoadFromIni(const wchar_t* iniPath);
 }

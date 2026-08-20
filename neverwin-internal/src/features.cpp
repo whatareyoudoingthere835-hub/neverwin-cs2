@@ -12,6 +12,9 @@ DebugState g_state;
 
 namespace {
 
+    // Алиас на живые оффсеты: встроенные дефолты либо значения из neverwin.ini.
+    const auto& off = offsets::g;
+
     struct Vector2 { float x = 0.0f; float y = 0.0f; };
 
     // --- Хоткеи. Маппинг соответствует оригинальному internal.txt. ---
@@ -38,10 +41,10 @@ namespace {
     uintptr_t GetEntityByHandle(uintptr_t entityList, uint32_t handle) {
         const uint32_t index = handle & 0x7FFF;
         const uintptr_t listEntry =
-            mem::Read<uintptr_t>(entityList + offsets::listEntryOffset + 8ull * (index >> 9));
+            mem::Read<uintptr_t>(entityList + off.listEntryOffset + 8ull * (index >> 9));
         if (!listEntry)
             return 0;
-        return mem::Read<uintptr_t>(listEntry + offsets::entryStride * (index & 0x1FF));
+        return mem::Read<uintptr_t>(listEntry + off.entryStride * (index & 0x1FF));
     }
 
     void NormalizeAngles(float& pitch, float& yaw) {
@@ -80,13 +83,13 @@ void RunFeatureLoop() {
     g_state.clientBase.store(clientBase);
     NW_LOG(L"client.dll @ 0x%llX", static_cast<unsigned long long>(clientBase));
     NW_LOG(L"оффсеты: EntityList=0x%llX LocalPlayer=0x%llX ViewAngles=0x%llX",
-           static_cast<unsigned long long>(offsets::dwEntityList),
-           static_cast<unsigned long long>(offsets::dwLocalPlayerPawn),
-           static_cast<unsigned long long>(offsets::dwViewAngles));
+           static_cast<unsigned long long>(off.dwEntityList),
+           static_cast<unsigned long long>(off.dwLocalPlayerPawn),
+           static_cast<unsigned long long>(off.dwViewAngles));
 
-    const uintptr_t entityListPtr  = clientBase + offsets::dwEntityList;
-    const uintptr_t localPlayerPtr = clientBase + offsets::dwLocalPlayerPawn;
-    const uintptr_t viewAnglesPtr  = clientBase + offsets::dwViewAngles;
+    const uintptr_t entityListPtr  = clientBase + off.dwEntityList;
+    const uintptr_t localPlayerPtr = clientBase + off.dwLocalPlayerPawn;
+    const uintptr_t viewAnglesPtr  = clientBase + off.dwViewAngles;
 
     std::random_device rd;
     std::mt19937 gen(rd());
@@ -107,7 +110,7 @@ void RunFeatureLoop() {
         if (!localPlayer)
             continue;
 
-        const int health = mem::Read<int>(localPlayer + offsets::m_iHealth);
+        const int health = mem::Read<int>(localPlayer + off.m_iHealth);
         g_state.localHealth.store(health);
         if (health <= 0)
             continue;
@@ -117,25 +120,25 @@ void RunFeatureLoop() {
         if (!entityList)
             continue;
 
-        const int localTeam = mem::Read<int>(localPlayer + offsets::m_iTeamNum);
+        const int localTeam = mem::Read<int>(localPlayer + off.m_iTeamNum);
         g_state.localTeam.store(localTeam);
 
         // --- 1. Антибхоп: пока нажат пробел — снимаем FL_ONGROUND (бит 0). ---
         if (g_features.antiBhop.load() && (GetAsyncKeyState(VK_SPACE) & 0x8000)) {
-            const uint32_t flags = mem::Read<uint32_t>(localPlayer + offsets::m_fFlags);
+            const uint32_t flags = mem::Read<uint32_t>(localPlayer + off.m_fFlags);
             if ((flags & 1u) != 0u) {
-                mem::Write<uint32_t>(localPlayer + offsets::m_fFlags, flags & ~1u);
+                mem::Write<uint32_t>(localPlayer + off.m_fFlags, flags & ~1u);
             }
         }
 
         // --- 2. Gamesense: 20% шанс дропа оружия при выстреле/перезарядке. ---
         if (g_features.gamesense.load()) {
-            const uint32_t weaponHandle = mem::Read<uint32_t>(localPlayer + offsets::m_pClippingWeapon);
+            const uint32_t weaponHandle = mem::Read<uint32_t>(localPlayer + off.m_pClippingWeapon);
             if (weaponHandle) {
                 const uintptr_t weapon = GetEntityByHandle(entityList, weaponHandle);
                 if (weapon) {
-                    const int  currentAmmo = mem::Read<int>(weapon + offsets::m_iClip1);
-                    const bool isReloading = mem::Read<uint8_t>(weapon + offsets::m_bInReload) != 0;
+                    const int  currentAmmo = mem::Read<int>(weapon + off.m_iClip1);
+                    const bool isReloading = mem::Read<uint8_t>(weapon + off.m_bInReload) != 0;
 
                     if ((previousAmmo != -1 && currentAmmo < previousAmmo) || isReloading) {
                         if (dropChance(gen) <= 20) {
@@ -150,7 +153,7 @@ void RunFeatureLoop() {
 
         // --- 3. Visual recoil x4. ---
         if (g_features.visualRecoil.load()) {
-            const Vector2 punch = mem::Read<Vector2>(localPlayer + offsets::m_aimPunchAngle);
+            const Vector2 punch = mem::Read<Vector2>(localPlayer + off.m_aimPunchAngle);
             Vector2 newPunch{ punch.x * 4.0f, punch.y * 4.0f };
 
             Vector2 view = mem::Read<Vector2>(viewAnglesPtr);
@@ -184,8 +187,8 @@ void RunFeatureLoop() {
                 if (!pawn || pawn == localPlayer)
                     continue;
 
-                const int enemyHealth = mem::Read<int>(pawn + offsets::m_iHealth);
-                const int enemyTeam   = mem::Read<int>(pawn + offsets::m_iTeamNum);
+                const int enemyHealth = mem::Read<int>(pawn + off.m_iHealth);
+                const int enemyTeam   = mem::Read<int>(pawn + off.m_iTeamNum);
                 if (enemyHealth > 0 && enemyTeam != localTeam) {
                     enemySpotted = true;
                     break;

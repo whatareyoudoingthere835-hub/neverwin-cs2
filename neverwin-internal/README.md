@@ -60,7 +60,46 @@ DLL из Debug тянет `vcruntime140d.dll`/`msvcp140d.dll`, которых н
 - **Корректная выгрузка**: END или кнопка → снятие обоих хуков, потом `FreeLibraryAndExitThread`.
 - **Инжектор** `neverwin_injector.exe` с человекочитаемыми ошибками на каждом шаге.
 - **Логи** в `%TEMP%\neverwin.log`.
-- **Оффсеты вынесены в один файл** `src/offsets.hpp` — после апдейта игры правится только он.
+- **Оффсеты из `neverwin.ini`** — после патча Valve ничего не пересобираешь,
+  просто кладёшь свежий ini рядом с DLL (см. раздел ниже).
+
+---
+
+## Вольво обновили все — что делать
+
+Оффсеты в CS2 меняются после каждого патча. Раньше это означало правку кода и
+пересборку; теперь оффсеты живут в `neverwin.ini` рядом с DLL:
+
+1. Запускаешь CS2 и [cs2-dumper](https://github.com/a2x/cs2-dumper) — он снимает
+   свежие оффсеты и схемы в папку `output/`.
+2. Генерируешь ini:
+   ```
+   python tools/dump_to_ini.py "C:\путь\к\cs2-dumper\output" "C:\папка с DLL\neverwin.ini"
+   ```
+3. Переинжект. Меню покажет зелёным **«Оффсеты: из neverwin.ini»** — значит свежие.
+
+Если ini нет — DLL работает на встроенных значениях из `src/offsets.hpp`, и после
+патча они почти наверняка стухшие: в меню `LocalPlayer: 0`, фичи молчат, в логе
+предупреждение. Креша при этом не будет — все чтения памяти защищены.
+
+Формат `neverwin.ini`:
+
+```ini
+[offsets]
+dwEntityList=0x2554050
+dwLocalPlayerPawn=0x23A9118
+dwViewAngles=0x23BF1A8
+m_iHealth=0x34C
+m_iTeamNum=0x3E7
+m_fFlags=0x3F4
+m_aimPunchAngle=0x14CC
+m_pClippingWeapon=0x1308
+m_iClip1=0x15A4
+m_bInReload=0x1704
+```
+
+(значения в hex; `listEntryOffset`/`entryStride` тоже можно переопределить,
+но они почти никогда не меняются)
 
 ## Управление
 
@@ -115,7 +154,7 @@ cmake --build build
 ## Если опять вылетит
 
 1. Открой `%TEMP%\neverwin.log` — там будет последняя строка перед крешем.
-2. Сверь оффсеты в `src/offsets.hpp` со свежим дампом — это причина №1.
+2. Сгенерируй свежий `neverwin.ini` из дампа (раздел выше) — стухшие оффсеты причина №1.
 3. Убедись: DLL собрана **Release x64**, инжектор запущен от администратора.
 
 ## Структура
@@ -123,16 +162,19 @@ cmake --build build
 ```
 neverwin-internal/
 ├── src/
-│   ├── main.cpp        — DllMain, главный поток, выгрузка
+│   ├── main.cpp        — DllMain, главный поток, загрузка neverwin.ini, выгрузка
 │   ├── features.cpp    — все фичи (логика из internal.txt, безопасно)
 │   ├── gui.cpp         — DX11 Present-хук, WndProc-хук, ImGui-меню
-│   ├── offsets.hpp     — все оффсеты (единственное место правки после апдейта)
+│   ├── offsets.hpp     — встроенные оффсеты (дефолты)
+│   ├── offsets.cpp     — чтение оффсетов из neverwin.ini
 │   ├── memory.hpp      — безопасные Read/Write
 │   ├── log.hpp         — лог в %TEMP%\neverwin.log
 │   ├── util.hpp        — UTF-16 → UTF-8
 │   └── pch.h           — общие инклуды
 ├── injector/
 │   └── injector.cpp    — x64-инжектор с понятными ошибками
+├── tools/
+│   └── dump_to_ini.py  — генератор neverwin.ini из дампа cs2-dumper
 ├── thirdparty/imgui/   — ImGui 1.93 (распакован из imgui-master.zip в корне репо)
 ├── CMakeLists.txt
 └── build.bat

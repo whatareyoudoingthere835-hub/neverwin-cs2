@@ -243,6 +243,13 @@ namespace {
         ImGui::Text("EntityList:  0x%llX",
                     static_cast<unsigned long long>(g_state.entityList.load()));
 
+        ImGui::TextColored(
+            g_state.offsetsFromIni.load() ? ImVec4(0.45f, 1.0f, 0.55f, 1.0f) : ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
+            "%s",
+            g_state.offsetsFromIni.load()
+                ? "Оффсеты: из neverwin.ini"
+                : "Оффсеты: ВСТРОЕННЫЕ — Valve обновили игру? Сгенерируй ini!");
+
         ImGui::Separator();
 
         if (ImGui::Button("Выгрузить DLL", ImVec2(-1, 0))) {

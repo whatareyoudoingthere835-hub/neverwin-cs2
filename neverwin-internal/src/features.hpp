@@ -20,6 +20,7 @@ struct DebugState {
     std::atomic<int>       localHealth{0};
     std::atomic<int>       localTeam{0};
     std::atomic<bool>      viewAnglesWritable{false};
+    std::atomic<bool>      offsetsFromIni{false}; // true = оффсеты из neverwin.ini
 };
 
 extern Features   g_features;
