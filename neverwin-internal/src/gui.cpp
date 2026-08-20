@@ -205,10 +205,14 @@ namespace {
             return;
 
         bool open = true;
-        ImGui::SetNextWindowSize(ImVec2(380, 260), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(380, 300), ImGuiCond_FirstUseEver);
         ImGui::Begin("NEVERWIN", &open, ImGuiWindowFlags_NoCollapse);
         if (!open)
             gui::g_menuOpen.store(false);
+
+        ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.65f, 1.0f),
+                           "professional software for losing professionally");
+        ImGui::Separator();
 
         bool v;
 
