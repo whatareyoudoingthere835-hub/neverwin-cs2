@@ -22,6 +22,9 @@ namespace {
         if (GetAsyncKeyState(VK_F4) & 1) g_features.antiBhop.store(!g_features.antiBhop.load());
         if (GetAsyncKeyState(VK_F5) & 1) g_features.gamesense.store(!g_features.gamesense.load());
         if (GetAsyncKeyState(VK_INSERT) & 1) gui::g_menuOpen.store(!gui::g_menuOpen.load());
+        // END — выгрузка: выставляет флаг, цикл фич завершается и
+        // gui::ShutdownAndExit снимает хуки и освобождает DLL.
+        if (GetAsyncKeyState(VK_END) & 1) gui::g_unloadRequested.store(true);
     }
 
     // --- Энтити-лист Source 2: список списков. ---

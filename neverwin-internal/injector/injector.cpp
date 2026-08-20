@@ -1,9 +1,18 @@
 // Простой x64-инжектор для neverwin.dll.
-// Каждый шаг печатает человекочитаемую ошибку — это главный
-// диагностический инструмент для "вылетает при инжекте".
+//
+// После CreateRemoteThread инжектор проверяет ФАКТИЧЕСКОЕ наличие модуля
+// в процессе цели через снапшот модулей (Module32First/Next) — это
+// единственный честный признак успеха. Раньше успех определялся по
+// выходному коду потока LoadLibraryW, и он врал в двух случаях:
+//   * поток не завершился за 10 сек -> GetExitCodeThread даёт STILL_ACTIVE
+//     (259), ненулевой -> выглядело как успех;
+//   * DLL загрузилась и сразу выгрузилась сама (например, не дождалась
+//     client.dll) -> LoadLibraryW вернул валидный адрес -> выглядело как
+//     успех, хотя модуля уже нет.
 #include <windows.h>
 #include <tlhelp32.h>
 #include <cstdio>
+#include <cwchar>
 #include <string>
 
 namespace {
@@ -59,6 +68,26 @@ namespace {
         return ok && !wow64;
     }
 
+    // ЗАГРУЖЕН ЛИ МОДУЛЬ В ПРОЦЕССЕ — вот это и есть "заинжектилось".
+    bool IsModuleLoaded(DWORD pid, const wchar_t* moduleName) {
+        const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+        if (snap == INVALID_HANDLE_VALUE)
+            return false;
+
+        MODULEENTRY32W me{ sizeof(me) };
+        bool found = false;
+        if (Module32FirstW(snap, &me)) {
+            do {
+                if (_wcsicmp(me.szModule, moduleName) == 0) {
+                    found = true;
+                    break;
+                }
+            } while (Module32NextW(snap, &me));
+        }
+        CloseHandle(snap);
+        return found;
+    }
+
     bool Inject(DWORD pid, const std::wstring& dllPath) {
         // Полный путь обязателен: LoadLibraryW ищет относительно процесса-цели.
         wchar_t fullPath[MAX_PATH]{};
@@ -71,6 +100,10 @@ namespace {
             return false;
         }
         wprintf(L"[+] DLL: %s\n", fullPath);
+
+        // Имя файла — для проверки в снапшоте модулей.
+        const wchar_t* baseName = wcsrchr(fullPath, L'\\');
+        baseName = baseName ? baseName + 1 : fullPath;
 
         const HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
         if (!hProcess) {
@@ -88,6 +121,7 @@ namespace {
 
         if (!WriteProcessMemory(hProcess, remote, fullPath, pathBytes, nullptr)) {
             PrintLastError(L"WriteProcessMemory");
+            VirtualFreeEx(hProcess, remote, 0, MEM_RELEASE);
             CloseHandle(hProcess);
             return false;
         }
@@ -96,6 +130,7 @@ namespace {
             GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryW"));
         if (!loadLibrary) {
             PrintLastError(L"GetProcAddress(LoadLibraryW)");
+            VirtualFreeEx(hProcess, remote, 0, MEM_RELEASE);
             CloseHandle(hProcess);
             return false;
         }
@@ -103,24 +138,57 @@ namespace {
         const HANDLE hThread = CreateRemoteThread(hProcess, nullptr, 0, loadLibrary, remote, 0, nullptr);
         if (!hThread) {
             PrintLastError(L"CreateRemoteThread");
+            VirtualFreeEx(hProcess, remote, 0, MEM_RELEASE);
             CloseHandle(hProcess);
             return false;
         }
 
-        WaitForSingleObject(hThread, 10000);
+        const DWORD wait = WaitForSingleObject(hThread, 10000);
         DWORD exitCode = 0;
-        GetExitCodeThread(hThread, &exitCode);
-        // exitCode == 0 => LoadLibraryW вернул NULL => DLL не загрузилась.
-        wprintf(L"[%s] LoadLibraryW вернул 0x%08lX\n", exitCode ? L"+" : L"-", exitCode);
-        if (!exitCode) {
-            wprintf(L"    -> Причины: DLL не x64 / собрана в Debug / не найдена зависимость.\n"
-                    L"    -> Детали ищи в %%TEMP%%\\neverwin.log — DLL пишет туда свой лог.\n");
+        if (!GetExitCodeThread(hThread, &exitCode)) {
+            PrintLastError(L"GetExitCodeThread");
         }
+
+        if (wait == WAIT_TIMEOUT || exitCode == STILL_ACTIVE) {
+            wprintf(L"[!] Поток LoadLibraryW не завершился за 10 сек (код 0x%08lX).\n", exitCode);
+            wprintf(L"    -> Похоже на дедлок loader lock или зависание в DllMain.\n");
+        } else if (wait == WAIT_FAILED) {
+            PrintLastError(L"WaitForSingleObject");
+        } else {
+            wprintf(L"[%s] LoadLibraryW вернул 0x%08lX\n", exitCode ? L"+" : L"-", exitCode);
+            if (!exitCode) {
+                wprintf(L"    -> LoadLibraryW вернул NULL: DLL не x64 / собрана в Debug /\n"
+                        L"       не найдена зависимость. Детали — в %%TEMP%%\\neverwin.log.\n");
+            }
+        }
+
+        // ЧЕСТНАЯ ПРОВЕРКА: модуль реально в процессе?
+        // Небольшая пауза: даём DllMain довести работу до конца.
+        Sleep(100);
+        const bool loaded = IsModuleLoaded(pid, baseName);
 
         CloseHandle(hThread);
         VirtualFreeEx(hProcess, remote, 0, MEM_RELEASE);
         CloseHandle(hProcess);
-        return exitCode != 0;
+
+        if (loaded) {
+            wprintf(L"[+] neverwin.dll в процессе %lu — инжект подтверждён.\n", pid);
+            if (wait == WAIT_TIMEOUT || exitCode == STILL_ACTIVE) {
+                wprintf(L"    (!) Но поток DllMain так и не завершился — проверь %%TEMP%%\\neverwin.log.\n");
+            }
+            return true;
+        }
+
+        if (exitCode != 0 && exitCode != STILL_ACTIVE && wait != WAIT_TIMEOUT) {
+            wprintf(L"[!] LoadLibraryW вернул ненулевой адрес, но модуля в процессе НЕТ.\n"
+                    L"    -> DLL загрузилась и сразу выгрузилась сама. Возможные причины:\n"
+                    L"       * в процессе не появилась client.dll — DLL ждёт её 120 сек и выходит;\n"
+                    L"       * антивирус / VAC выбил модуль из процесса.\n"
+                    L"    -> Точную причину пишет сама DLL: открой %%TEMP%%\\neverwin.log.\n");
+        } else {
+            wprintf(L"[-] Инжект не подтверждён: neverwin.dll в процессе не найден.\n");
+        }
+        return false;
     }
 }
 
@@ -154,7 +222,7 @@ int wmain(int argc, wchar_t* argv[]) {
     wprintf(L"[*] Цель: cs2.exe (PID %lu)\n", pid);
 
     const bool ok = Inject(pid, dllPath);
-    wprintf(ok ? L"[+] Готово. В игре: INSERT — меню, END — выгрузка.\n"
+    wprintf(ok ? L"[+] Готово. В игре: INSERT — меню (по умолчанию скрыто), END — выгрузка.\n"
                : L"[-] Инжект не удался, см. ошибки выше.\n");
     return ok ? 0 : 1;
 }
