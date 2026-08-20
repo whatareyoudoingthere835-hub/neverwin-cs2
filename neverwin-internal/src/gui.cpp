@@ -217,7 +217,7 @@ namespace {
         bool v;
 
         v = g_features.antiAimbot.load();
-        if (ImGui::Checkbox("Антиаимбот: тряска при враге [F1]", &v))
+        if (ImGui::Checkbox("Реверс аимбот: наводка на тимейтов [F1]", &v))
             g_features.antiAimbot.store(v);
 
         v = g_features.antiAimless.load();

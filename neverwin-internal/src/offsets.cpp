@@ -48,6 +48,10 @@ namespace offsets {
         o.m_pClippingWeapon = ReadHex(L"m_pClippingWeapon", o.m_pClippingWeapon);
         o.m_iClip1          = ReadHex(L"m_iClip1",          o.m_iClip1);
         o.m_bInReload       = ReadHex(L"m_bInReload",       o.m_bInReload);
+        o.m_pGameSceneNode  = ReadHex(L"m_pGameSceneNode",  o.m_pGameSceneNode);
+        o.m_vecAbsOrigin    = ReadHex(L"m_vecAbsOrigin",    o.m_vecAbsOrigin);
+        o.m_pCameraServices = ReadHex(L"m_pCameraServices", o.m_pCameraServices);
+        o.m_vecViewOffset   = ReadHex(L"m_vecViewOffset",   o.m_vecViewOffset);
         o.listEntryOffset   = ReadHex(L"listEntryOffset",   o.listEntryOffset);
         o.entryStride       = ReadHex(L"entryStride",       o.entryStride);
 

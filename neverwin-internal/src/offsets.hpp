@@ -28,6 +28,14 @@ namespace offsets {
         std::uintptr_t m_iClip1          = 0x15A4;
         std::uintptr_t m_bInReload       = 0x1704;
 
+        // --- позиции, для реверс аимбота (F1) ---
+        // Самые нестабильные из схемных: значения от последнего известного
+        // дампа. После патча Valve — свежие из dump_to_ini.py, как обычно.
+        std::uintptr_t m_pGameSceneNode  = 0x318;  // C_BaseEntity → CGameSceneNode*
+        std::uintptr_t m_vecAbsOrigin    = 0xC8;   // CGameSceneNode → Vector (абсолютная позиция)
+        std::uintptr_t m_pCameraServices = 0x1150; // C_BasePlayerPawn → CPlayer_CameraServices*
+        std::uintptr_t m_vecViewOffset   = 0x10D8; // CPlayer_CameraServices → Vector (высота глаз)
+
         // --- устройство энтити-листа Source 2 (меняется крайне редко) ---
         // listEntry = entityList + 0x10 + 8 * (index >> 9)
         // element   = listEntry  + 0x78 * (index & 0x1FF)

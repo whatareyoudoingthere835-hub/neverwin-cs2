@@ -1,5 +1,6 @@
 import os
 import time
+import math
 import random
 import ctypes
 import threading
@@ -21,6 +22,14 @@ m_pClippingWeapon = 0x1308
 m_iClip1 = 0x15A4
 m_bInReload = 0x1704
 
+# --- Оффсеты позиций (реверс аимбот) ---
+# От последнего известного дампа; после патча CS2 — обнови,
+# свежие значения в той же выгрузке, что и остальные оффсеты.
+m_pGameSceneNode = 0x318    # C_BaseEntity -> CGameSceneNode*
+m_vecAbsOrigin = 0xC8       # CGameSceneNode -> Vector
+m_pCameraServices = 0x1150  # C_BasePlayerPawn -> CPlayer_CameraServices*
+m_vecViewOffset = 0x10D8    # CPlayer_CameraServices -> Vector (высота глаз)
+
 # --- Настройки меню ---
 features = {
     "antiaimbot": False,
@@ -35,7 +44,7 @@ def clear_console():
 def draw_menu():
     clear_console()
     print("=== NEVERWIN (Python Edition) ===")
-    print(f"[F1] Антиаимбот (тряска от врагов) : {'ON' if features['antiaimbot'] else 'OFF'}")
+    print(f"[F1] Реверс аимбот (наводка на тимейтов) : {'ON' if features['antiaimbot'] else 'OFF'}")
     print(f"[F2] Антиаимлесс (смотреть в пол)  : {'ON' if features['antiaimless'] else 'OFF'}")
     print(f"[F3] Visual Recoil (+400%)         : {'ON' if features['visrecoil'] else 'OFF'}")
     print(f"[F4] Антибхоп                      : {'ON' if features['antibhop'] else 'OFF'}")
@@ -131,11 +140,73 @@ def neverwin_loop():
                     pm.write_float(client + dwViewAngles, new_x)
                     pm.write_float(client + dwViewAngles + 4, new_y)
 
-            # --- 4. ПАРСИНГ ВРАГОВ (Для Антиаимбота/Антиаимлесса) ---
-            enemy_spotted = False
-            if features["antiaimbot"] or features["antiaimless"]:
+            # --- 4a. РЕВЕРС АИМБОТ (наводка на ближайшего тиммейта) ---
+            # Тряску убрали: каждый тик считаем углы до живого тиммейта
+            # и пишем их во viewAngles. Детерминированно, без рандома.
+            if features["antiaimbot"]:
+                eye = [0.0, 0.0, 0.0]
+                scene_node = pm.read_longlong(local_player + m_pGameSceneNode)
+                if scene_node:
+                    eye = [
+                        pm.read_float(scene_node + m_vecAbsOrigin),
+                        pm.read_float(scene_node + m_vecAbsOrigin + 4),
+                        pm.read_float(scene_node + m_vecAbsOrigin + 8),
+                    ]
+                cam = pm.read_longlong(local_player + m_pCameraServices)
+                if cam:
+                    eye[0] += pm.read_float(cam + m_vecViewOffset)
+                    eye[1] += pm.read_float(cam + m_vecViewOffset + 4)
+                    eye[2] += pm.read_float(cam + m_vecViewOffset + 8)
+
+                if eye != [0.0, 0.0, 0.0]:
+                    best_origin = None
+                    best_dist2 = float("inf")
+                    for i in range(1, 64):
+                        list_entry = pm.read_longlong(entity_list + 0x10 + 8 * (i >> 9))
+                        if not list_entry:
+                            continue
+                        pawn = pm.read_longlong(list_entry + 120 * (i & 0x1FF))
+                        if not pawn or pawn == local_player:
+                            continue
+                        if pm.read_int(pawn + m_iHealth) <= 0:
+                            continue
+                        if pm.read_int(pawn + m_iTeamNum) != local_team:
+                            continue
+
+                        node = pm.read_longlong(pawn + m_pGameSceneNode)
+                        if not node:
+                            continue
+                        origin = [
+                            pm.read_float(node + m_vecAbsOrigin),
+                            pm.read_float(node + m_vecAbsOrigin + 4),
+                            pm.read_float(node + m_vecAbsOrigin + 8),
+                        ]
+                        dx = origin[0] - eye[0]
+                        dy = origin[1] - eye[1]
+                        dz = origin[2] - eye[2]
+                        dist2 = dx * dx + dy * dy + dz * dz
+                        if dist2 < best_dist2:
+                            best_dist2 = dist2
+                            best_origin = origin
+
+                    if best_origin:
+                        dx = best_origin[0] - eye[0]
+                        dy = best_origin[1] - eye[1]
+                        dz = (best_origin[2] + 64.0) - eye[2]  # корпус/голова
+                        dist2d = max(math.hypot(dx, dy), 1.0)
+                        pitch = math.degrees(math.atan2(-dz, dist2d))
+                        yaw = math.degrees(math.atan2(dy, dx))
+                        pitch = max(-89.0, min(89.0, pitch))
+                        while yaw > 180.0: yaw -= 360.0
+                        while yaw < -180.0: yaw += 360.0
+                        pm.write_float(client + dwViewAngles, pitch)
+                        pm.write_float(client + dwViewAngles + 4, yaw)
+
+            # --- 4b. АНТИАИМЛЕСС (виден враг — смотрим в пол) ---
+            if features["antiaimless"]:
+                enemy_spotted = False
                 for i in range(1, 64):
-                    list_entry = pm.read_longlong(entity_list + ((8 * (i & 0x7FFF)) >> 9) + 16)
+                    list_entry = pm.read_longlong(entity_list + 0x10 + 8 * (i >> 9))
                     if not list_entry:
                         continue
                     pawn = pm.read_longlong(list_entry + 120 * (i & 0x1FF))
@@ -149,29 +220,13 @@ def neverwin_loop():
                         enemy_spotted = True
                         break
 
-            if enemy_spotted:
-                view_x = pm.read_float(client + dwViewAngles)
-                view_y = pm.read_float(client + dwViewAngles + 4)
-
-                if features["antiaimless"]:
+                if enemy_spotted:
                     # Жестко уводим в пол
                     pm.write_float(client + dwViewAngles, 89.0)
+                    view_y = pm.read_float(client + dwViewAngles + 4)
                     new_y = view_y + 10.0
                     if new_y > 180.0: new_y -= 360.0
                     pm.write_float(client + dwViewAngles + 4, new_y)
-
-                elif features["antiaimbot"]:
-                    # Трясем прицел
-                    offset_x = view_x + random.uniform(-15.0, 15.0)
-                    offset_y = view_y + random.uniform(-15.0, 15.0)
-                    
-                    if offset_x > 89.0: offset_x = 89.0
-                    if offset_x < -89.0: offset_x = -89.0
-                    if offset_y > 180.0: offset_y -= 360.0
-                    if offset_y < -180.0: offset_y += 360.0
-                    
-                    pm.write_float(client + dwViewAngles, offset_x)
-                    pm.write_float(client + dwViewAngles + 4, offset_y)
 
         except Exception:
             # Игнорим ошибки чтения (например, во время загрузки карты)

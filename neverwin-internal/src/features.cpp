@@ -5,6 +5,8 @@
 #include "memory.hpp"
 #include "offsets.hpp"
 
+#include <cmath>
+#include <cfloat>
 #include <random>
 
 Features   g_features;
@@ -16,6 +18,46 @@ namespace {
     const auto& off = offsets::g;
 
     struct Vector2 { float x = 0.0f; float y = 0.0f; };
+    struct Vector3 { float x = 0.0f; float y = 0.0f; float z = 0.0f; };
+
+    inline Vector3 operator+(const Vector3& a, const Vector3& b) {
+        return { a.x + b.x, a.y + b.y, a.z + b.z };
+    }
+
+    constexpr float kRadToDeg = 57.29577951308232f;
+
+    // Глаза локального игрока: abs origin + view offset из camera services.
+    // Если сцена-нода не прочиталась (стух оффсет) — вернёт нули, и аимбот
+    // в этот тик просто не сработает, а не уведёт камеру в космос.
+    Vector3 GetEyePosition(uintptr_t localPlayer) {
+        Vector3 origin{};
+        const uintptr_t sceneNode = mem::Read<uintptr_t>(localPlayer + off.m_pGameSceneNode);
+        if (sceneNode)
+            origin = mem::Read<Vector3>(sceneNode + off.m_vecAbsOrigin);
+
+        Vector3 viewOffset{};
+        const uintptr_t cameraServices = mem::Read<uintptr_t>(localPlayer + off.m_pCameraServices);
+        if (cameraServices)
+            viewOffset = mem::Read<Vector3>(cameraServices + off.m_vecViewOffset);
+
+        return origin + viewOffset;
+    }
+
+    // Углы из точки A в точку B. Конвенция Source: pitch вверх отрицательный,
+    // yaw из atan2 уже лежит в [-180, 180].
+    Vector2 CalcAngles(const Vector3& from, const Vector3& to) {
+        const float dx = to.x - from.x;
+        const float dy = to.y - from.y;
+        const float dz = to.z - from.z;
+        // Минимум 1 юнит горизонтали — atan2 не увидит NaN, когда тиммейт
+        // стоит ровно на тебе (или на той же XY-точке).
+        const float dist2d = std::fmaxf(std::sqrtf(dx * dx + dy * dy), 1.0f);
+
+        Vector2 angles{};
+        angles.x = std::atan2f(-dz, dist2d) * kRadToDeg;
+        angles.y = std::atan2f(dy, dx) * kRadToDeg;
+        return angles;
+    }
 
     // --- Хоткеи. Маппинг соответствует оригинальному internal.txt. ---
     void HandleHotkeys() {
@@ -94,7 +136,6 @@ void RunFeatureLoop() {
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<int> dropChance(1, 100);
-    std::uniform_real_distribution<float> randAim(-15.0f, 15.0f);
 
     int previousAmmo = -1;
     Vector2 oldPunch{};
@@ -179,8 +220,54 @@ void RunFeatureLoop() {
             oldPunch = {};
         }
 
-        // --- 4. Антиаимбот / антиаимлесс: если виден враг — портим свой прицел. ---
-        if (g_features.antiAimbot.load() || g_features.antiAimless.load()) {
+        // --- 4a. Реверс аимбот (F1): наводка на ближайшего живого тиммейта. ---
+        // Тряски больше нет: каждый тик считаем углы до тиммейта и пишем их
+        // во viewAngles. Детерминированно, без рандома.
+        if (g_features.antiAimbot.load()) {
+            const Vector3 eye = GetEyePosition(localPlayer);
+            if (eye.x != 0.0f || eye.y != 0.0f || eye.z != 0.0f) {
+                uintptr_t bestPawn = 0;
+                Vector3   bestOrigin{};
+                float     bestDist2 = FLT_MAX;
+
+                for (uint32_t i = 1; i < 64; ++i) {
+                    const uintptr_t pawn = GetEntityByHandle(entityList, i);
+                    if (!pawn || pawn == localPlayer)
+                        continue;
+                    if (mem::Read<int>(pawn + off.m_iHealth) <= 0)
+                        continue;
+                    if (mem::Read<int>(pawn + off.m_iTeamNum) != localTeam)
+                        continue;
+
+                    const uintptr_t sceneNode = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
+                    if (!sceneNode)
+                        continue;
+                    const Vector3 origin = mem::Read<Vector3>(sceneNode + off.m_vecAbsOrigin);
+
+                    const float dx = origin.x - eye.x;
+                    const float dy = origin.y - eye.y;
+                    const float dz = origin.z - eye.z;
+                    const float dist2 = dx * dx + dy * dy + dz * dz;
+                    if (dist2 < bestDist2) {
+                        bestDist2 = dist2;
+                        bestPawn = pawn;
+                        bestOrigin = origin;
+                    }
+                }
+
+                if (bestPawn) {
+                    // +64 юнита вверх от origin — корпус/голова. Бон-матрицу
+                    // не дёргаем: там свой оффсет на каждый патч.
+                    const Vector3 target{ bestOrigin.x, bestOrigin.y, bestOrigin.z + 64.0f };
+                    Vector2 angles = CalcAngles(eye, target);
+                    NormalizeAngles(angles.x, angles.y);
+                    mem::Write<Vector2>(viewAnglesPtr, angles);
+                }
+            }
+        }
+
+        // --- 4b. Антиаимлесс (F2): виден враг — взгляд в пол. ---
+        if (g_features.antiAimless.load()) {
             bool enemySpotted = false;
             for (uint32_t i = 1; i < 64; ++i) {
                 const uintptr_t pawn = GetEntityByHandle(entityList, i);
@@ -197,13 +284,8 @@ void RunFeatureLoop() {
 
             if (enemySpotted) {
                 Vector2 view = mem::Read<Vector2>(viewAnglesPtr);
-                if (g_features.antiAimless.load()) {
-                    view.x = 89.0f;
-                    view.y += 15.0f;
-                } else {
-                    view.x += randAim(gen);
-                    view.y += randAim(gen);
-                }
+                view.x = 89.0f;
+                view.y += 15.0f;
                 NormalizeAngles(view.x, view.y);
                 mem::Write<Vector2>(viewAnglesPtr, view);
             }

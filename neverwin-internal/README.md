@@ -1,7 +1,8 @@
 # NEVERWIN — внутренний DLL (фикс + ImGui-меню)
 
 Исправленная версия `internal.txt` из корня репозитория + меню на ImGui (DX11) + инжектор.
-Всё, что сделано — в этой папке; оригиналы (`internal.txt`, `besthack.py`) не тронуты.
+Всё, что сделано — в этой папке; `internal.txt` не тронут (эталонный прототип),
+`besthack.py` (Python Edition) держится в синхроне по фичам.
 
 ---
 
@@ -96,6 +97,10 @@ m_aimPunchAngle=0x14CC
 m_pClippingWeapon=0x1308
 m_iClip1=0x15A4
 m_bInReload=0x1704
+m_pGameSceneNode=0x318
+m_vecAbsOrigin=0xC8
+m_pCameraServices=0x1150
+m_vecViewOffset=0x10D8
 ```
 
 (значения в hex; `listEntryOffset`/`entryStride` тоже можно переопределить,
@@ -106,7 +111,7 @@ m_bInReload=0x1704
 | Клавиша | Действие |
 |---|---|
 | INSERT | открыть/закрыть меню |
-| F1 | антиаимбот (тряска прицела при враге) |
+| F1 | реверс аимбот (наводка на ближайшего живого тиммейта) |
 | F2 | антиаимлесс (взгляд в пол при враге) |
 | F3 | visual recoil x4 |
 | F4 | антибхоп |
