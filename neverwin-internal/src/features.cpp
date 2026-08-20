@@ -4,6 +4,7 @@
 #include "log.hpp"
 #include "memory.hpp"
 #include "offsets.hpp"
+#include "shared_state.hpp"
 
 #include <cmath>
 #include <cfloat>
@@ -63,6 +64,7 @@ namespace {
         if (GetAsyncKeyState(VK_F3) & 1) g_features.visualRecoil.store(!g_features.visualRecoil.load());
         if (GetAsyncKeyState(VK_F4) & 1) g_features.antiBhop.store(!g_features.antiBhop.load());
         if (GetAsyncKeyState(VK_F5) & 1) g_features.gamesense.store(!g_features.gamesense.load());
+        if (GetAsyncKeyState(VK_F6) & 1) gui::g_hudVisible.store(!gui::g_hudVisible.load());
         if (GetAsyncKeyState(VK_INSERT) & 1) gui::g_menuOpen.store(!gui::g_menuOpen.load());
         // END — выгрузка: выставляет флаг, цикл фич завершается и
         // gui::ShutdownAndExit снимает хуки и освобождает DLL.
@@ -130,6 +132,14 @@ void RunFeatureLoop() {
     const uintptr_t localPlayerPtr = clientBase + off.dwLocalPlayerPawn;
     const uintptr_t viewAnglesPtr  = clientBase + off.dwViewAngles;
 
+    // Внешний HUD-оверлей читает состояние отсюда.
+    nwshared::Publisher shm;
+    if (shm) {
+        shm->dllVersion = NW_VERSION;
+    } else {
+        NW_LOG(L"WARNING: shared memory не создалась — внешний оверлей не увидит состояние.");
+    }
+
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<int> dropChance(1, 100);
@@ -140,8 +150,13 @@ void RunFeatureLoop() {
     for (;;) {
         Sleep(1);
         HandleHotkeys();
-        if (gui::g_unloadRequested.load())
+        if (gui::g_unloadRequested.load()) {
+            if (shm) {
+                shm->unloadRequested = 1;
+                shm.Commit();
+            }
             return;
+        }
 
         const uintptr_t localPlayer = mem::Read<uintptr_t>(localPlayerPtr);
         g_state.localPlayer.store(localPlayer);
@@ -160,6 +175,26 @@ void RunFeatureLoop() {
 
         const int localTeam = mem::Read<int>(localPlayer + off.m_iTeamNum);
         g_state.localTeam.store(localTeam);
+
+        // Снапшот состояния для внешнего HUD-оверлея.
+        if (shm) {
+            shm->antiAimbot      = g_features.antiAimbot.load() ? 1u : 0u;
+            shm->antiAimless     = g_features.antiAimless.load() ? 1u : 0u;
+            shm->visualRecoil    = g_features.visualRecoil.load() ? 1u : 0u;
+            shm->antiBhop        = g_features.antiBhop.load() ? 1u : 0u;
+            shm->gamesense       = g_features.gamesense.load() ? 1u : 0u;
+            shm->hudVisible      = gui::g_hudVisible.load() ? 1u : 0u;
+            shm->menuOpen        = gui::g_menuOpen.load() ? 1u : 0u;
+            shm->unloadRequested = 0u;
+            shm->clientBase      = clientBase;
+            shm->entityList      = entityList;
+            shm->localPlayer     = localPlayer;
+            shm->localHealth     = health;
+            shm->localTeam       = localTeam;
+            shm->viewAnglesWritable = g_state.viewAnglesWritable.load() ? 1u : 0u;
+            shm->offsetsFromIni     = g_state.offsetsFromIni.load() ? 1u : 0u;
+            shm.Commit();
+        }
 
         // --- 1. Антибхоп: пока нажат пробел — снимаем FL_ONGROUND (бит 0). ---
         if (g_features.antiBhop.load() && (GetAsyncKeyState(VK_SPACE) & 0x8000)) {

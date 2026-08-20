@@ -4,6 +4,8 @@
 #include "log.hpp"
 #include "util.hpp"
 
+#include <dxgi1_2.h> // IDXGIFactory2/IDXGISwapChain1/DXGI_SWAP_CHAIN_DESC1 (mingw: отдельно от dxgi.h)
+
 #include "imgui.h"
 #include "backends/imgui_impl_win32.h"
 #include "backends/imgui_impl_dx11.h"
@@ -20,6 +22,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 namespace gui {
     std::atomic<bool> g_menuOpen{false};
     std::atomic<bool> g_unloadRequested{false};
+    std::atomic<bool> g_hudVisible{true};
 }
 
 namespace {
@@ -34,14 +37,20 @@ namespace {
     constexpr int kPresentIndex       = 8;
     constexpr int kResizeBuffersIndex = 13;
 
-    // IID объявлен явно, чтобы не зависеть от dxguid.lib / uuid.lib.
+    // IID объявлены явно, чтобы не зависеть от dxguid.lib / uuid.lib.
     const GUID kIID_ID3D11Device = {
         0xdb6f6ddb, 0xac77, 0x4e88, { 0x82, 0x53, 0x81, 0x9d, 0xf9, 0xbb, 0xf1, 0x40 } };
+    const GUID kIID_IDXGIFactory2 = {
+        0x50c83a1c, 0xe072, 0x4c48, { 0x87, 0xb0, 0x36, 0x30, 0xfa, 0x36, 0xa6, 0xd0 } };
 
-    // Состояние хуков.
-    void**    g_vtable          = nullptr;  // vtable, которую мы пропатчили
-    PresentFn g_originalPresent = nullptr;
-    ResizeFn  g_originalResize  = nullptr;
+    // Состояние хуков. CS2 презентит через IDXGISwapChain1, у которой СВОЯ
+    // vtable — поэтому хуков два, и у каждого свои оригиналы.
+    void**    g_vtable           = nullptr;  // vtable IDXGISwapChain, которую пропатчили
+    void**    g_vtable1          = nullptr;  // vtable IDXGISwapChain1
+    PresentFn g_originalPresent  = nullptr;
+    ResizeFn  g_originalResize   = nullptr;
+    PresentFn g_originalPresent1 = nullptr;
+    ResizeFn  g_originalResize1  = nullptr;
     WNDPROC   g_originalWndProc = nullptr;
     HWND      g_gameWindow      = nullptr;
     HANDLE    g_eventUnhooked   = nullptr;  // "все хуки сняты, можно free"
@@ -83,16 +92,41 @@ namespace {
 
     // --- Снятие хуков (идемпотентно). ---
     void RestoreVtable() {
-        if (!g_vtable)
-            return;
-        DWORD old = 0;
-        VirtualProtect(g_vtable, sizeof(void*) * 24, PAGE_READWRITE, &old);
-        if (g_originalPresent)
-            g_vtable[kPresentIndex] = reinterpret_cast<void*>(g_originalPresent);
-        if (g_originalResize)
-            g_vtable[kResizeBuffersIndex] = reinterpret_cast<void*>(g_originalResize);
-        VirtualProtect(g_vtable, sizeof(void*) * 24, old, &old);
-        g_vtable = nullptr;
+        const auto restore = [](void** vtable, void* present, void* resize) {
+            if (!vtable)
+                return;
+            DWORD old = 0;
+            VirtualProtect(vtable, sizeof(void*) * 24, PAGE_READWRITE, &old);
+            if (present)
+                vtable[kPresentIndex] = present;
+            if (resize)
+                vtable[kResizeBuffersIndex] = resize;
+            VirtualProtect(vtable, sizeof(void*) * 24, old, &old);
+        };
+        restore(g_vtable,  reinterpret_cast<void*>(g_originalPresent),  reinterpret_cast<void*>(g_originalResize));
+        restore(g_vtable1, reinterpret_cast<void*>(g_originalPresent1), reinterpret_cast<void*>(g_originalResize1));
+        g_vtable  = nullptr;
+        g_vtable1 = nullptr;
+    }
+
+    // Оригинальный Present для конкретного swapchain: у IDXGISwapChain и
+    // IDXGISwapChain1 разные vtable и, возможно, разные функции.
+    PresentFn OriginalPresentFor(IDXGISwapChain* swapChain) {
+        if (g_vtable1) {
+            void** vt = *reinterpret_cast<void***>(swapChain);
+            if (vt == g_vtable1 && g_originalPresent1)
+                return g_originalPresent1;
+        }
+        return g_originalPresent;
+    }
+
+    ResizeFn OriginalResizeFor(IDXGISwapChain* swapChain) {
+        if (g_vtable1) {
+            void** vt = *reinterpret_cast<void***>(swapChain);
+            if (vt == g_vtable1 && g_originalResize1)
+                return g_originalResize1;
+        }
+        return g_originalResize;
     }
 
     void RestoreWndProc() {
@@ -259,13 +293,17 @@ namespace {
         if (ImGui::Button("Выгрузить DLL", ImVec2(-1, 0))) {
             gui::g_unloadRequested.store(true);
         }
-        ImGui::TextDisabled("INSERT - меню | END - выгрузка");
+        ImGui::TextDisabled("v%d | INSERT - меню | F6 - HUD | END - выгрузка", NW_VERSION);
 
         ImGui::End();
     }
 
     // --- Хук Present: рисуем меню перед отдачей кадра игре. ---
     HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
+        // Оригинал вычисляем ДО RestoreVtable: после снятия хука vtable-указатель
+        // уже не сопоставить с сохранёнными.
+        const PresentFn orig = OriginalPresentFor(swapChain);
+
         if (gui::g_unloadRequested.load()) {
             // Порядок важен: сначала снимаем WndProc, потом убиваем ImGui,
             // потом восстанавливаем vtable. Событие — в самом конце, чтобы
@@ -273,13 +311,13 @@ namespace {
             RestoreWndProc();
             ShutdownImGui();
             RestoreVtable();
-            const HRESULT hr = g_originalPresent(swapChain, syncInterval, flags);
+            const HRESULT hr = orig(swapChain, syncInterval, flags);
             SetEvent(g_eventUnhooked);
             return hr;
         }
 
         if (!g_imguiReady.load() && !InitImGui(swapChain)) {
-            return g_originalPresent(swapChain, syncInterval, flags);
+            return orig(swapChain, syncInterval, flags);
         }
 
         ImGui_ImplDX11_NewFrame();
@@ -290,17 +328,19 @@ namespace {
         ImGui::Render();
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-        return g_originalPresent(swapChain, syncInterval, flags);
+        return orig(swapChain, syncInterval, flags);
     }
 
     // --- Хук ResizeBuffers: пересоздаём объекты бэкенда после ресайза. ---
     HRESULT STDMETHODCALLTYPE HookedResizeBuffers(
         IDXGISwapChain* swapChain, UINT bufferCount, UINT width, UINT height,
         DXGI_FORMAT newFormat, UINT swapChainFlags) {
+        const ResizeFn orig = OriginalResizeFor(swapChain);
+
         if (g_imguiReady.load())
             ImGui_ImplDX11_InvalidateDeviceObjects();
 
-        const HRESULT hr = g_originalResize(swapChain, bufferCount, width, height, newFormat, swapChainFlags);
+        const HRESULT hr = orig(swapChain, bufferCount, width, height, newFormat, swapChainFlags);
 
         if (g_imguiReady.load())
             (void)ImGui_ImplDX11_CreateDeviceObjects();
@@ -343,17 +383,16 @@ namespace {
             nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0,
             D3D11_SDK_VERSION, &sd, &dummySwapChain, &device, &level, &context);
 
-        // Своё окно больше не нужно в любом случае.
-        if (dummyWindow && dummyWindow != GetDesktopWindow())
-            DestroyWindow(dummyWindow);
-        UnregisterClassW(kDummyClass, wc.hInstance);
-
         if (FAILED(hr) || !dummySwapChain) {
+            if (dummyWindow && dummyWindow != GetDesktopWindow())
+                DestroyWindow(dummyWindow);
+            UnregisterClassW(kDummyClass, wc.hInstance);
             NW_LOG(L"D3D11CreateDeviceAndSwapChain: 0x%08X", static_cast<unsigned>(hr));
             return false;
         }
 
-        // vtable у всех swapchain'ов процесса общая — патчим один раз.
+        // 1) Хук IDXGISwapChain (классика). CS2 этим классом не презентит,
+        //    но пусть будет — вдруг другой рендер-путь.
         g_vtable = *reinterpret_cast<void***>(dummySwapChain);
 
         DWORD old = 0;
@@ -364,13 +403,58 @@ namespace {
         g_vtable[kResizeBuffersIndex] = reinterpret_cast<void*>(&HookedResizeBuffers);
         VirtualProtect(g_vtable, sizeof(void*) * 24, old, &old);
 
-        // Dummy-цепочка больше не нужна — vtable уже пропатчена.
+        // 2) Хук IDXGISwapChain1: CS2 создаёт swapchain через
+        //    CreateSwapChainForHwnd, и это ДРУГОЙ класс со своей vtable.
+        //    Без этого хука меню на DX11 не появлялось вообще.
+        {
+            IDXGIFactory2* factory2 = nullptr;
+            const HRESULT hrFactory = CreateDXGIFactory1(
+                kIID_IDXGIFactory2, reinterpret_cast<void**>(&factory2));
+            if (SUCCEEDED(hrFactory) && factory2) {
+                DXGI_SWAP_CHAIN_DESC1 sd1{};
+                sd1.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
+                sd1.SampleDesc.Count = 1;
+                sd1.BufferUsage      = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+                sd1.BufferCount      = 1;
+
+                IDXGISwapChain1* sc1 = nullptr;
+                const HRESULT hr1 = factory2->CreateSwapChainForHwnd(
+                    device, dummyWindow, &sd1, nullptr, nullptr, &sc1);
+                if (SUCCEEDED(hr1) && sc1) {
+                    g_vtable1 = *reinterpret_cast<void***>(sc1);
+                    if (g_vtable1 != g_vtable) {
+                        DWORD old1 = 0;
+                        VirtualProtect(g_vtable1, sizeof(void*) * 24, PAGE_READWRITE, &old1);
+                        g_originalPresent1 = reinterpret_cast<PresentFn>(g_vtable1[kPresentIndex]);
+                        g_originalResize1  = reinterpret_cast<ResizeFn>(g_vtable1[kResizeBuffersIndex]);
+                        g_vtable1[kPresentIndex]       = reinterpret_cast<void*>(&HookedPresent);
+                        g_vtable1[kResizeBuffersIndex] = reinterpret_cast<void*>(&HookedResizeBuffers);
+                        VirtualProtect(g_vtable1, sizeof(void*) * 24, old1, &old1);
+                        NW_LOG(L"хук Present установлен и на IDXGISwapChain1 (vtable 0x%llX)",
+                               static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(g_vtable1)));
+                    } else {
+                        g_vtable1 = nullptr; // та же vtable — уже пропатчена
+                    }
+                    sc1->Release();
+                } else {
+                    NW_LOG(L"CreateSwapChainForHwnd: 0x%08X — только хук IDXGISwapChain",
+                           static_cast<unsigned>(hr1));
+                }
+                factory2->Release();
+            }
+        }
+
+        // Dummy-цепочки и окно больше не нужны — vtable пропатчены.
+        if (dummyWindow && dummyWindow != GetDesktopWindow())
+            DestroyWindow(dummyWindow);
+        UnregisterClassW(kDummyClass, wc.hInstance);
         dummySwapChain->Release();
         device->Release();
         context->Release();
 
-        NW_LOG(L"хук Present установлен (vtable 0x%llX)",
-               static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(g_vtable)));
+        NW_LOG(L"хуки Present установлены (IDXGISwapChain 0x%llX, IDXGISwapChain1 0x%llX)",
+               static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(g_vtable)),
+               static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(g_vtable1)));
         return true;
     }
 }
@@ -382,7 +466,7 @@ namespace gui {
         if (!HookSwapchain()) {
             NW_LOG(L"WARNING: хук Present не встал — меню будет недоступно (фичи работают).");
         }
-        return g_vtable != nullptr;
+        return g_vtable != nullptr || g_vtable1 != nullptr;
     }
 
     [[noreturn]] void ShutdownAndExit(HMODULE hModule) {

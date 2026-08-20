@@ -1,5 +1,10 @@
 #pragma once
 
+// Версия сборки DLL. Передаётся при сборке (-DNW_VERSION=3), 0 = собрано вручную.
+#ifndef NW_VERSION
+#define NW_VERSION 0
+#endif
+
 // Общие флаги сборки.
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN

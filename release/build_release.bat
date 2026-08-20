@@ -32,7 +32,7 @@ if "%V%"=="" (
 )
 echo [*] Собираю версию v%V%
 
-cmake -S neverwin-internal -B release\_build -A x64 -DCMAKE_BUILD_TYPE=Release
+cmake -S neverwin-internal -B release\_build -A x64 -DCMAKE_BUILD_TYPE=Release -DNW_VERSION=%V%
 if errorlevel 1 exit /b 1
 cmake --build release\_build --config Release
 if errorlevel 1 exit /b 1
@@ -40,6 +40,7 @@ if errorlevel 1 exit /b 1
 if not exist release mkdir release
 copy /y release\_build\Release\neverwin.dll          release\neverwin_v%V%.dll          >nul
 copy /y release\_build\Release\neverwin_injector.exe release\neverwin_injector_v%V%.exe >nul
+copy /y release\_build\Release\neverwin_overlay.exe  release\neverwin_overlay_v%V%.exe  >nul
 
 if exist release\neverwin.ini (
     echo [i] neverwin.ini лежит рядом с DLL — оффсеты подхватятся.
@@ -52,6 +53,7 @@ echo.
 echo Готово:
 echo   release\neverwin_v%V%.dll
 echo   release\neverwin_injector_v%V%.exe
+echo   release\neverwin_overlay_v%V%.exe
 exit /b 0
 
 :parsever

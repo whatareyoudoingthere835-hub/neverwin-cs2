@@ -10,7 +10,12 @@ namespace gui {
     // снимает хуки и сигналит событие, после чего DLL можно освобождать.
     extern std::atomic<bool> g_unloadRequested;
 
-    // Ставит хук IDXGISwapChain::Present через dummy-устройство.
+    // F6 — показать/скрыть внешний HUD-оверлей (читает сам оверлей из shared memory).
+    extern std::atomic<bool> g_hudVisible;
+
+    // Ставит хуки Present на IDXGISwapChain И IDXGISwapChain1 через
+    // dummy-устройство. CS2 презентит кадр через IDXGISwapChain1 — без
+    // второго хука меню на DX11 не появлялось вообще.
     // Возвращает false, если D3D11 недоступен (фичи продолжат работать без меню).
     bool Init();
 

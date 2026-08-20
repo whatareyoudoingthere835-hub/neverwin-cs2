@@ -71,6 +71,7 @@ retry_on_cache() {
 
 COMMON=(-target x86_64-windows-gnu -std=c++17 -O2
     -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_CRT_SECURE_NO_WARNINGS
+    -DNW_VERSION="$V"
     -I"$SRC/src" -I"$SRC/thirdparty/imgui" -I"$SRC/thirdparty/imgui/backends")
 
 # --- import lib для d3dcompiler_47.dll ---
@@ -125,10 +126,17 @@ retry_on_cache "$ZIG" c++ -target x86_64-windows-gnu -O2 \
     -o "$WORK/neverwin_injector.exe" "$WORK/injector.o" "$WORK/bridge.o" \
     -luser32 -lkernel32 -lshell32
 
+# --- оверлей (внешний HUD, D2D) ---
+retry_on_cache "$ZIG" c++ "${COMMON[@]}" -c "$SRC/overlay/overlay.cpp" -o "$WORK/overlay.o"
+retry_on_cache "$ZIG" c++ -target x86_64-windows-gnu -O2 \
+    -o "$WORK/neverwin_overlay.exe" "$WORK/overlay.o" "$WORK/bridge.o" \
+    -ld2d1 -ldwrite -ld3d11 -ldxgi -luser32 -lkernel32
+
 # --- раскладка по release/ ---
 mkdir -p "$OUT"
 cp "$WORK/neverwin.dll"          "$OUT/neverwin_v${V}.dll"
 cp "$WORK/neverwin_injector.exe" "$OUT/neverwin_injector_v${V}.exe"
+cp "$WORK/neverwin_overlay.exe"  "$OUT/neverwin_overlay_v${V}.exe"
 if [[ -f "$OUT/neverwin.ini" ]]; then
     echo "[i] neverwin.ini лежит рядом с DLL — оффсеты подхватятся."
 else
@@ -140,3 +148,4 @@ echo ""
 echo "Готово:"
 echo "  $OUT/neverwin_v${V}.dll"
 echo "  $OUT/neverwin_injector_v${V}.exe"
+echo "  $OUT/neverwin_overlay_v${V}.exe"
