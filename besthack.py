@@ -8,27 +8,28 @@ import keyboard
 from pymem import Pymem
 from pymem.process import module_from_name
 
-# --- Оффсеты движка ---
-dwEntityList = 0x2554050
-dwLocalPlayerPawn = 0x23A9118
-dwViewAngles = 0x23BF1A8
+# --- Оффсеты движка (дамп build 14176, 20.08.2026) ---
+dwEntityList = 0x2555050
+dwLocalPlayerPawn = 0x23AA118
+dwViewAngles = 0x23C01A8
 
 # --- Оффсеты схем ---
 m_iHealth = 0x34C
 m_iTeamNum = 0x3E7
 m_fFlags = 0x3F4
-m_aimPunchAngle = 0x14CC
-m_pClippingWeapon = 0x1308
-m_iClip1 = 0x15A4
-m_bInReload = 0x1704
+m_iClip1 = 0x1700
+m_bInReload = 0x1814
 
-# --- Оффсеты позиций (реверс аимбот) ---
-# От последнего известного дампа; после патча CS2 — обнови,
-# свежие значения в той же выгрузке, что и остальные оффсеты.
-m_pGameSceneNode = 0x318    # C_BaseEntity -> CGameSceneNode*
+# --- Позиции (реверс аимбот) ---
+m_pGameSceneNode = 0x330    # C_BaseEntity -> CGameSceneNode*
 m_vecAbsOrigin = 0xC8       # CGameSceneNode -> Vector
-m_pCameraServices = 0x1150  # C_BasePlayerPawn -> CPlayer_CameraServices*
-m_vecViewOffset = 0x10D8    # CPlayer_CameraServices -> Vector (высота глаз)
+m_vecViewOffset = 0xE78     # C_BaseModelEntity -> Vector (высота глаз)
+
+# --- Сервисы ---
+m_pCameraServices = 0x1240      # C_BasePlayerPawn -> CPlayer_CameraServices*
+m_vecCsViewPunchAngle = 0x48    # CPlayer_CameraServices -> QAngle (панч отдачи)
+m_pWeaponServices = 0x1208      # C_BasePlayerPawn -> CPlayer_WeaponServices*
+m_hActiveWeapon = 0x60          # CPlayer_WeaponServices -> CHandle (u32)
 
 # --- Настройки меню ---
 features = {
@@ -105,25 +106,33 @@ def neverwin_loop():
                     pm.write_uint(local_player + m_fFlags, flags & ~1)
 
             # --- 2. GAMESENSE (Дроп оружия) ---
-            weapon_handle = pm.read_longlong(local_player + m_pClippingWeapon)
-            if weapon_handle:
-                weapon_entity = get_entity_by_handle(pm, client, entity_list, weapon_handle)
-                if weapon_entity:
-                    current_ammo = pm.read_int(weapon_entity + m_iClip1)
-                    is_reloading = pm.read_bool(weapon_entity + m_bInReload)
+            # Оружие через сервисы: pawn -> m_pWeaponServices -> m_hActiveWeapon
+            weapon_services = pm.read_longlong(local_player + m_pWeaponServices)
+            if weapon_services:
+                weapon_handle = pm.read_uint(weapon_services + m_hActiveWeapon)
+                if weapon_handle:
+                    weapon_entity = get_entity_by_handle(pm, client, entity_list, weapon_handle)
+                    if weapon_entity:
+                        current_ammo = pm.read_int(weapon_entity + m_iClip1)
+                        is_reloading = pm.read_bool(weapon_entity + m_bInReload)
 
-                    if (previous_ammo != -1 and current_ammo < previous_ammo) or is_reloading:
-                        if random.randint(1, 100) <= 20: # 20% шанс
-                            # Симуляция нажатия G
-                            ctypes.windll.user32.keybd_event(0x47, 0, 0, 0)
-                            ctypes.windll.user32.keybd_event(0x47, 0, 2, 0)
-                            time.sleep(0.3)
-                    previous_ammo = current_ammo
+                        if (previous_ammo != -1 and current_ammo < previous_ammo) or is_reloading:
+                            if random.randint(1, 100) <= 20: # 20% шанс
+                                # Симуляция нажатия G
+                                ctypes.windll.user32.keybd_event(0x47, 0, 0, 0)
+                                ctypes.windll.user32.keybd_event(0x47, 0, 2, 0)
+                                time.sleep(0.3)
+                        previous_ammo = current_ammo
 
             # --- 3. VISUAL RECOIL (+400%) ---
+            # Панч отдачи теперь в camera services: m_vecCsViewPunchAngle
             if features["visrecoil"]:
-                punch_x = pm.read_float(local_player + m_aimPunchAngle)
-                punch_y = pm.read_float(local_player + m_aimPunchAngle + 4)
+                punch_x = 0.0
+                punch_y = 0.0
+                cam_services = pm.read_longlong(local_player + m_pCameraServices)
+                if cam_services:
+                    punch_x = pm.read_float(cam_services + m_vecCsViewPunchAngle)
+                    punch_y = pm.read_float(cam_services + m_vecCsViewPunchAngle + 4)
 
                 if punch_x != 0.0 or punch_y != 0.0:
                     view_x = pm.read_float(client + dwViewAngles)
@@ -152,11 +161,10 @@ def neverwin_loop():
                         pm.read_float(scene_node + m_vecAbsOrigin + 4),
                         pm.read_float(scene_node + m_vecAbsOrigin + 8),
                     ]
-                cam = pm.read_longlong(local_player + m_pCameraServices)
-                if cam:
-                    eye[0] += pm.read_float(cam + m_vecViewOffset)
-                    eye[1] += pm.read_float(cam + m_vecViewOffset + 4)
-                    eye[2] += pm.read_float(cam + m_vecViewOffset + 8)
+                # m_vecViewOffset теперь поле павна (C_BaseModelEntity)
+                eye[0] += pm.read_float(local_player + m_vecViewOffset)
+                eye[1] += pm.read_float(local_player + m_vecViewOffset + 4)
+                eye[2] += pm.read_float(local_player + m_vecViewOffset + 8)
 
                 if eye != [0.0, 0.0, 0.0]:
                     best_origin = None

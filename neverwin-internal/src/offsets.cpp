@@ -44,14 +44,15 @@ namespace offsets {
         o.m_iHealth         = ReadHex(L"m_iHealth",         o.m_iHealth);
         o.m_iTeamNum        = ReadHex(L"m_iTeamNum",        o.m_iTeamNum);
         o.m_fFlags          = ReadHex(L"m_fFlags",          o.m_fFlags);
-        o.m_aimPunchAngle   = ReadHex(L"m_aimPunchAngle",   o.m_aimPunchAngle);
-        o.m_pClippingWeapon = ReadHex(L"m_pClippingWeapon", o.m_pClippingWeapon);
-        o.m_iClip1          = ReadHex(L"m_iClip1",          o.m_iClip1);
-        o.m_bInReload       = ReadHex(L"m_bInReload",       o.m_bInReload);
         o.m_pGameSceneNode  = ReadHex(L"m_pGameSceneNode",  o.m_pGameSceneNode);
+        o.m_vecViewOffset   = ReadHex(L"m_vecViewOffset",   o.m_vecViewOffset);
         o.m_vecAbsOrigin    = ReadHex(L"m_vecAbsOrigin",    o.m_vecAbsOrigin);
         o.m_pCameraServices = ReadHex(L"m_pCameraServices", o.m_pCameraServices);
-        o.m_vecViewOffset   = ReadHex(L"m_vecViewOffset",   o.m_vecViewOffset);
+        o.m_pWeaponServices = ReadHex(L"m_pWeaponServices", o.m_pWeaponServices);
+        o.m_vecCsViewPunchAngle = ReadHex(L"m_vecCsViewPunchAngle", o.m_vecCsViewPunchAngle);
+        o.m_hActiveWeapon   = ReadHex(L"m_hActiveWeapon",   o.m_hActiveWeapon);
+        o.m_iClip1          = ReadHex(L"m_iClip1",          o.m_iClip1);
+        o.m_bInReload       = ReadHex(L"m_bInReload",       o.m_bInReload);
         o.listEntryOffset   = ReadHex(L"listEntryOffset",   o.listEntryOffset);
         o.entryStride       = ReadHex(L"entryStride",       o.entryStride);
 

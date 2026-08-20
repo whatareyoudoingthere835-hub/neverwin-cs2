@@ -91,20 +91,21 @@ DLL из Debug тянет `vcruntime140d.dll`/`msvcp140d.dll`, которых н
 
 ```ini
 [offsets]
-dwEntityList=0x2554050
-dwLocalPlayerPawn=0x23A9118
-dwViewAngles=0x23BF1A8
+dwEntityList=0x2555050
+dwLocalPlayerPawn=0x23AA118
+dwViewAngles=0x23C01A8
 m_iHealth=0x34C
 m_iTeamNum=0x3E7
 m_fFlags=0x3F4
-m_aimPunchAngle=0x14CC
-m_pClippingWeapon=0x1308
-m_iClip1=0x15A4
-m_bInReload=0x1704
-m_pGameSceneNode=0x318
+m_pGameSceneNode=0x330
+m_vecViewOffset=0xE78
 m_vecAbsOrigin=0xC8
-m_pCameraServices=0x1150
-m_vecViewOffset=0x10D8
+m_pCameraServices=0x1240
+m_pWeaponServices=0x1208
+m_vecCsViewPunchAngle=0x48
+m_hActiveWeapon=0x60
+m_iClip1=0x1700
+m_bInReload=0x1814
 ```
 
 (значения в hex; `listEntryOffset`/`entryStride` тоже можно переопределить,

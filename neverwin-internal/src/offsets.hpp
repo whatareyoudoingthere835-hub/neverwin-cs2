@@ -15,26 +15,35 @@ namespace offsets {
 
     struct Offsets {
         // --- client.dll ---
-        std::uintptr_t dwEntityList      = 0x2554050; // CGameEntitySystem::m_list
-        std::uintptr_t dwLocalPlayerPawn = 0x23A9118;
-        std::uintptr_t dwViewAngles      = 0x23BF1A8;
+        std::uintptr_t dwEntityList      = 0x2555050; // CGameEntitySystem::m_list
+        std::uintptr_t dwLocalPlayerPawn = 0x23AA118;
+        std::uintptr_t dwViewAngles      = 0x23C01A8;
 
-        // --- схема C_CSPlayerPawnBase ---
+        // --- C_BaseEntity (и все наследники) ---
         std::uintptr_t m_iHealth         = 0x34C;
         std::uintptr_t m_iTeamNum        = 0x3E7;
         std::uintptr_t m_fFlags          = 0x3F4;  // бит 0 = FL_ONGROUND
-        std::uintptr_t m_aimPunchAngle   = 0x14CC; // QAngle (pitch, yaw)
-        std::uintptr_t m_pClippingWeapon = 0x1308; // CEntityHandle (u32)
-        std::uintptr_t m_iClip1          = 0x15A4;
-        std::uintptr_t m_bInReload       = 0x1704;
+        std::uintptr_t m_pGameSceneNode  = 0x330;  // C_BaseEntity → CGameSceneNode*
+        std::uintptr_t m_vecViewOffset   = 0x0E78; // C_BaseModelEntity → Vector (высота глаз)
 
-        // --- позиции, для реверс аимбота (F1) ---
-        // Самые нестабильные из схемных: значения от последнего известного
-        // дампа. После патча Valve — свежие из dump_to_ini.py, как обычно.
-        std::uintptr_t m_pGameSceneNode  = 0x318;  // C_BaseEntity → CGameSceneNode*
-        std::uintptr_t m_vecAbsOrigin    = 0xC8;   // CGameSceneNode → Vector (абсолютная позиция)
-        std::uintptr_t m_pCameraServices = 0x1150; // C_BasePlayerPawn → CPlayer_CameraServices*
-        std::uintptr_t m_vecViewOffset   = 0x10D8; // CPlayer_CameraServices → Vector (высота глаз)
+        // --- CGameSceneNode ---
+        std::uintptr_t m_vecAbsOrigin    = 0xC8;   // Vector (абсолютная позиция)
+
+        // --- C_BasePlayerPawn ---
+        std::uintptr_t m_pCameraServices = 0x1240; // CPlayer_CameraServices*
+        std::uintptr_t m_pWeaponServices = 0x1208; // CPlayer_WeaponServices*
+
+        // --- CPlayer_CameraServices: визуальный панч отдачи ---
+        // (замена m_aimPunchAngle — поле переехало из павна в камеру)
+        std::uintptr_t m_vecCsViewPunchAngle = 0x48; // QAngle (pitch, yaw)
+
+        // --- CPlayer_WeaponServices: активное оружие ---
+        // (замена m_pClippingWeapon — теперь оружие через сервис)
+        std::uintptr_t m_hActiveWeapon   = 0x60;   // CHandle<C_BasePlayerWeapon> (u32)
+
+        // --- оружие ---
+        std::uintptr_t m_iClip1          = 0x1700; // C_BasePlayerWeapon
+        std::uintptr_t m_bInReload       = 0x1814; // C_CSWeaponBase
 
         // --- устройство энтити-листа Source 2 (меняется крайне редко) ---
         // listEntry = entityList + 0x10 + 8 * (index >> 9)

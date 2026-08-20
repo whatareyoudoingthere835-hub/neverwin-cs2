@@ -26,20 +26,17 @@ namespace {
 
     constexpr float kRadToDeg = 57.29577951308232f;
 
-    // Глаза локального игрока: abs origin + view offset из camera services.
-    // Если сцена-нода не прочиталась (стух оффсет) — вернёт нули, и аимбот
-    // в этот тик просто не сработает, а не уведёт камеру в космос.
+    // Глаза локального игрока: abs origin из сцена-ноды + view offset.
+    // m_vecViewOffset теперь поле C_BaseModelEntity — читается прямо из павна,
+    // без второго указателя. Если сцена-нода не прочиталась (стух оффсет) —
+    // вернёт нули, и аимбот в этот тик просто не сработает.
     Vector3 GetEyePosition(uintptr_t localPlayer) {
         Vector3 origin{};
         const uintptr_t sceneNode = mem::Read<uintptr_t>(localPlayer + off.m_pGameSceneNode);
         if (sceneNode)
             origin = mem::Read<Vector3>(sceneNode + off.m_vecAbsOrigin);
 
-        Vector3 viewOffset{};
-        const uintptr_t cameraServices = mem::Read<uintptr_t>(localPlayer + off.m_pCameraServices);
-        if (cameraServices)
-            viewOffset = mem::Read<Vector3>(cameraServices + off.m_vecViewOffset);
-
+        const Vector3 viewOffset = mem::Read<Vector3>(localPlayer + off.m_vecViewOffset);
         return origin + viewOffset;
     }
 
@@ -173,28 +170,37 @@ void RunFeatureLoop() {
         }
 
         // --- 2. Gamesense: 20% шанс дропа оружия при выстреле/перезарядке. ---
+        // Оружие теперь через сервисы: pawn -> m_pWeaponServices -> m_hActiveWeapon.
         if (g_features.gamesense.load()) {
-            const uint32_t weaponHandle = mem::Read<uint32_t>(localPlayer + off.m_pClippingWeapon);
-            if (weaponHandle) {
-                const uintptr_t weapon = GetEntityByHandle(entityList, weaponHandle);
-                if (weapon) {
-                    const int  currentAmmo = mem::Read<int>(weapon + off.m_iClip1);
-                    const bool isReloading = mem::Read<uint8_t>(weapon + off.m_bInReload) != 0;
+            const uintptr_t weaponServices = mem::Read<uintptr_t>(localPlayer + off.m_pWeaponServices);
+            if (weaponServices) {
+                const uint32_t weaponHandle = mem::Read<uint32_t>(weaponServices + off.m_hActiveWeapon);
+                if (weaponHandle) {
+                    const uintptr_t weapon = GetEntityByHandle(entityList, weaponHandle);
+                    if (weapon) {
+                        const int  currentAmmo = mem::Read<int>(weapon + off.m_iClip1);
+                        const bool isReloading = mem::Read<uint8_t>(weapon + off.m_bInReload) != 0;
 
-                    if ((previousAmmo != -1 && currentAmmo < previousAmmo) || isReloading) {
-                        if (dropChance(gen) <= 20) {
-                            PressDropKey();
-                            Sleep(300);
+                        if ((previousAmmo != -1 && currentAmmo < previousAmmo) || isReloading) {
+                            if (dropChance(gen) <= 20) {
+                                PressDropKey();
+                                Sleep(300);
+                            }
                         }
+                        previousAmmo = currentAmmo;
                     }
-                    previousAmmo = currentAmmo;
                 }
             }
         }
 
         // --- 3. Visual recoil x4. ---
+        // Панч отдачи больше не лежит в павне: он в camera services
+        // (m_vecCsViewPunchAngle), читаем через m_pCameraServices.
         if (g_features.visualRecoil.load()) {
-            const Vector2 punch = mem::Read<Vector2>(localPlayer + off.m_aimPunchAngle);
+            Vector2 punch{};
+            const uintptr_t cameraServices = mem::Read<uintptr_t>(localPlayer + off.m_pCameraServices);
+            if (cameraServices)
+                punch = mem::Read<Vector2>(cameraServices + off.m_vecCsViewPunchAngle);
             Vector2 newPunch{ punch.x * 4.0f, punch.y * 4.0f };
 
             Vector2 view = mem::Read<Vector2>(viewAnglesPtr);

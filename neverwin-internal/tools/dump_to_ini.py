@@ -12,8 +12,8 @@ DLL читает при инжекте — перекомпилировать н
     python dump_to_ini.py <папка с дампом cs2-dumper> [куда положить neverwin.ini]
 
 По умолчанию ini пишется в папку дампа — положи его рядом с neverwin.dll.
-Если какого-то ключа в дампе нет — скрипт предупредит и пропустит его;
-DLL подставит встроенное значение (см. src/offsets.hpp).
+Если ключа в дампе нет — скрипт предупредит и пропустит его; DLL подставит
+встроенное значение (см. src/offsets.hpp).
 """
 
 import json
@@ -24,19 +24,21 @@ import sys
 # Сетевая часть: модуль client.dll
 NET_KEYS = ("dwEntityList", "dwLocalPlayerPawn", "dwViewAngles")
 
-# Схема: класс C_CSPlayerPawnBase
-SCHEMA_KEYS = ("m_iHealth", "m_iTeamNum", "m_fFlags", "m_aimPunchAngle",
-               "m_pClippingWeapon", "m_iClip1", "m_bInReload")
-
-# Схема: ключи из других классов (реверс аимбот — позиции). Каждый ключ
-# ищем строго внутри своего класса, иначе первое вхождение в дампе может
-# оказаться из другого класса с другим оффсетом.
-CLASS_KEYS = (
-    ("C_BaseEntity",           "m_pGameSceneNode"),
-    ("CGameSceneNode",         "m_vecAbsOrigin"),
-    ("C_BasePlayerPawn",       "m_pCameraServices"),
-    ("CPlayer_CameraServices", "m_vecViewOffset"),
-)
+# Схема: класс -> ключи. Поиск СТРОГО внутри класса — многие имена полей
+# (m_fFlags, m_iHealth, ...) встречаются в разных классах с разными оффсетами,
+# и глобальный «первый попавшийся» даёт чужое значение. Оффсеты плоские:
+# pawn наследует всю цепочку, поэтому класс-владелец поля не важен для чтения
+# pawn + offset, важно не перепутать само значение.
+CLASS_KEYS = {
+    "C_BaseEntity":           ("m_iHealth", "m_iTeamNum", "m_fFlags", "m_pGameSceneNode"),
+    "C_BaseModelEntity":      ("m_vecViewOffset",),
+    "CGameSceneNode":         ("m_vecAbsOrigin",),
+    "C_BasePlayerPawn":       ("m_pCameraServices", "m_pWeaponServices"),
+    "CPlayer_CameraServices": ("m_vecCsViewPunchAngle",),
+    "CPlayer_WeaponServices": ("m_hActiveWeapon",),
+    "C_BasePlayerWeapon":     ("m_iClip1",),
+    "C_CSWeaponBase":         ("m_bInReload",),
+}
 
 
 def find_in_json(obj, key, out):
@@ -54,11 +56,6 @@ def find_in_json(obj, key, out):
             find_in_json(v, key, out)
             if out:
                 return
-
-
-def load_json(path):
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        return json.load(f)
 
 
 def find_in_class(obj, cls, field, out):
@@ -79,6 +76,11 @@ def find_in_class(obj, cls, field, out):
                 return
 
 
+def load_json(path):
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return json.load(f)
+
+
 def net_from_json(path):
     result = {}
     try:
@@ -94,9 +96,9 @@ def net_from_json(path):
     return result
 
 
-def schema_from_json(path, keys, cls=None):
-    """cls=None — глобальный поиск ключей. cls задан — поиск строго
-    внутри класса, с фолбэком на глобальный (с предупреждением)."""
+def schema_from_json(path, cls, keys):
+    """Ищет ключи строго внутри класса cls. Фолбэк на глобальный поиск —
+    с предупреждением (лучше предупредить, чем тихо взять чужое поле)."""
     result = {}
     try:
         data = load_json(path)
@@ -105,21 +107,18 @@ def schema_from_json(path, keys, cls=None):
         return result
     for key in keys:
         found = []
-        if cls:
-            find_in_class(data, cls, key, found)
-            if not found:
-                find_in_json(data, key, found)
-                if found:
-                    print(f"  [!] {key}: класс {cls} в дампе не найден, "
-                          f"взято первое вхождение — проверь значение")
-        else:
+        find_in_class(data, cls, key, found)
+        if not found:
             find_in_json(data, key, found)
+            if found:
+                print(f"  [!] {key}: класс {cls} в дампе не найден, "
+                      f"взято первое вхождение — проверь значение")
         if found:
             result[key] = found[0]
     return result
 
 
-def schema_from_hpp(path, keys, cls):
+def schema_from_hpp(path, cls, keys):
     result = {}
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -174,16 +173,14 @@ def main():
     # 2) Схема: client_dll.json, иначе client_dll.hpp / client.dll.hpp.
     p = os.path.join(dump_dir, "client_dll.json")
     if os.path.isfile(p):
-        schema = schema_from_json(p, SCHEMA_KEYS)
-        for cls, key in CLASS_KEYS:
-            schema.update(schema_from_json(p, (key,), cls))
+        for cls, keys in CLASS_KEYS.items():
+            schema.update(schema_from_json(p, cls, keys))
     if not schema:
         for name in ("client_dll.hpp", "client.dll.hpp"):
             p = os.path.join(dump_dir, name)
             if os.path.isfile(p):
-                schema = schema_from_hpp(p, SCHEMA_KEYS, "C_CSPlayerPawnBase")
-                for cls, key in CLASS_KEYS:
-                    schema.update(schema_from_hpp(p, (key,), cls))
+                for cls, keys in CLASS_KEYS.items():
+                    schema.update(schema_from_hpp(p, cls, keys))
                 if schema:
                     break
 
@@ -192,22 +189,21 @@ def main():
     for key in NET_KEYS:
         if key in net:
             lines.append(f"{key}=0x{net[key]:X}")
-    for key in SCHEMA_KEYS:
-        if key in schema:
-            lines.append(f"{key}=0x{schema[key]:X}")
-    for _cls, key in CLASS_KEYS:
-        if key in schema:
-            lines.append(f"{key}=0x{schema[key]:X}")
+    for cls, keys in CLASS_KEYS.items():
+        for key in keys:
+            if key in schema:
+                lines.append(f"{key}=0x{schema[key]:X}")
 
     with open(ini_path, "w", encoding="ascii") as f:
         f.write("\n".join(lines) + "\n")
 
     # 4) Отчёт.
+    total = len(NET_KEYS) + sum(len(keys) for keys in CLASS_KEYS.values())
     missing = [k for k in NET_KEYS if k not in net]
-    missing += [k for k in SCHEMA_KEYS if k not in schema]
-    missing += [k for _cls, k in CLASS_KEYS if k not in schema]
-    total = len(NET_KEYS) + len(SCHEMA_KEYS) + len(CLASS_KEYS)
-    print(f"[+] Записано {len(net) + len(schema)}/{total} ключей: {ini_path}")
+    for cls, keys in CLASS_KEYS.items():
+        missing += [f"{cls}::{k}" for k in keys if k not in schema]
+    found = len(net) + len(schema)
+    print(f"[+] Записано {found}/{total} ключей: {ini_path}")
     if missing:
         print(f"[!] Не найдено в дампе: {', '.join(missing)} — DLL возьмёт встроенные значения.")
         print("[!] Проверь, что дамп снят с актуального клиента (cs2-dumper при запущенной CS2).")
