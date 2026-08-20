@@ -6,8 +6,11 @@
 // Минимальный лог: пишет в %TEMP%\neverwin.log и в OutputDebugString
 // (видно в DebugView). В оригинале не было ни строчки лога — креш на
 // инжекте приходилось лечить вслепую.
+//
+// НЕ называть пространство имён "log": на MSVC это конфликт с CRT-функцией
+// log() из math.h (ошибка C2757 — "символ с этим именем уже существует").
 // ============================================================================
-namespace log {
+namespace nwlog {
 
     inline std::wstring GetLogPath() {
         wchar_t tmp[MAX_PATH]{};
@@ -56,4 +59,4 @@ namespace log {
 }
 
 // Удобный макрос с префиксом.
-#define NW_LOG(fmt, ...) log::Write(L"[neverwin] " fmt L"\n", ##__VA_ARGS__)
+#define NW_LOG(fmt, ...) nwlog::Write(L"[neverwin] " fmt L"\n", ##__VA_ARGS__)

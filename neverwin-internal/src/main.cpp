@@ -13,7 +13,7 @@ namespace {
     DWORD WINAPI HackThreadStub(LPVOID param) {
         const HMODULE hModule = static_cast<HMODULE>(param);
 
-        log::Init();
+        nwlog::Init();
         NW_LOG(L"DLL загружена. Поток %lu, PID %lu.",
                GetCurrentThreadId(), GetCurrentProcessId());
 
