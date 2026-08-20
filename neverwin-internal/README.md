@@ -4,6 +4,10 @@
 Всё, что сделано — в этой папке; `internal.txt` не тронут (эталонный прототип),
 `besthack.py` (Python Edition) держится в синхроне по фичам.
 
+**Готовые сборки** — в [`../release`](../release): `neverwin_vN.dll` + `neverwin_injector_vN.exe`,
+чем больше N — тем новее. Сборка релиза: `release/build_release.bat` (Windows) или
+`release/build_release.sh` (Linux, кросс через zig).
+
 ---
 
 ## Почему вылетало при инжекте (разбор internal.txt)

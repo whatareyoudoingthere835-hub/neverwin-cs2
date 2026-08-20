@@ -1,0 +1,4 @@
+# Временные файлы сборки
+release/_build/
+__pycache__/
+*.pyc
