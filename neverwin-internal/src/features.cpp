@@ -540,11 +540,46 @@ void RunFeatureLoop() {
         const uintptr_t localPlayer = mem::Read<uintptr_t>(localPlayerPtr);
         const uintptr_t localController =
             mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerController);
-        const uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
+        uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
         g_state.localPlayer.store(localPlayer);
-        g_state.entityList.store(entityList);
         if (!localPlayer || !entityList)
             continue;
+
+        // Проверяем layout entity system на local pawn ровно один раз для
+        // каждого нового указателя системы. Это лечит невалидный +0x10 layout,
+        // при котором slots 1..64 возвращали мусор вместо controller.
+        static uintptr_t checkedEntitySystem = 0;
+        static uintptr_t resolvedEntitySystem = 0;
+        static bool entityLayoutLogged = false;
+        if (entityList != checkedEntitySystem) {
+            checkedEntitySystem = entityList;
+            resolvedEntitySystem = entityList;
+            uintptr_t discoveredSystem = 0, discoveredListOffset = 0, discoveredStride = 0;
+            const uint32_t localPawnHandle = localController
+                ? mem::Read<uint32_t>(localController + off.m_hPawn) : 0;
+            if (ent::DiscoverEntityListLayout(entityList, localPlayer, localPawnHandle,
+                                              discoveredSystem, discoveredListOffset,
+                                              discoveredStride)) {
+                resolvedEntitySystem = discoveredSystem;
+                entityList = discoveredSystem;
+                offsets::g.listEntryOffset = discoveredListOffset;
+                offsets::g.entryStride = discoveredStride;
+                NW_LOG(L"entity-list: layout найден по local pawn: system=0x%llX listOffset=0x%llX stride=0x%llX",
+                       static_cast<unsigned long long>(entityList),
+                       static_cast<unsigned long long>(discoveredListOffset),
+                       static_cast<unsigned long long>(discoveredStride));
+            } else if (!entityLayoutLogged) {
+                entityLayoutLogged = true;
+                NW_LOG(L"WARNING: entity-list: layout local pawn не найден; использую fallback +0x%llX/0x%llX.",
+                       static_cast<unsigned long long>(offsets::g.listEntryOffset),
+                       static_cast<unsigned long long>(offsets::g.entryStride));
+            }
+        }
+        // При обнаруженном промежуточном root используем его и в следующих
+        // проходах, пока исходный dwEntityList pointer не сменится.
+        if (resolvedEntitySystem)
+            entityList = resolvedEntitySystem;
+        g_state.entityList.store(entityList);
 
         const int health = mem::Read<int>(localPlayer + off.m_iHealth);
         g_state.localHealth.store(health);

@@ -50,6 +50,89 @@ namespace ent {
         return GetEntityByHandle(entityList, index);
     }
 
+    // Если обновление меняет внутреннюю позицию таблицы chunks в
+    // CGameEntitySystem, жёсткие +0x10/+0x78 начинают возвращать валидные, но
+    // совершенно чужие адреса. Ищем layout по единственному надёжно известному
+    // объекту — local pawn, полученному через dwLocalPlayerPawn. Совпадение
+    // именно указателя pawn исключает угадывание по health/team.
+    inline bool DiscoverEntityListLayout(uintptr_t entitySystem, uintptr_t knownPawn,
+                                         uint32_t knownHandle, uintptr_t& outSystem,
+                                         uintptr_t& outListOffset, uintptr_t& outStride) {
+        if (!entitySystem || !knownPawn)
+            return false;
+
+        const uintptr_t roots[] = {
+            entitySystem,
+            mem::Read<uintptr_t>(entitySystem),
+            mem::Read<uintptr_t>(entitySystem + 8),
+            mem::Read<uintptr_t>(entitySystem + 0x10),
+        };
+        constexpr uintptr_t strides[] = { 0x78, 0x80, 0x70 };
+        constexpr int kChunkCount = 64;
+        constexpr int kEntriesPerChunk = 512;
+
+        // Нормальный CHandle уже содержит индекс local pawn. Этот быстрый
+        // путь проверяет ровно соответствующую ячейку и не делает тяжёлый
+        // полный обход таблицы в игровом тике.
+        const uint32_t knownIndex = knownHandle & kHandleIndexMask;
+        if (knownIndex != 0 && knownIndex != kInvalidHandleIndex) {
+            for (uintptr_t root : roots) {
+                if (!root || !mem::IsValidPtr(reinterpret_cast<const void*>(root), 0x20))
+                    continue;
+                for (uintptr_t listOffset = 0; listOffset <= 0x400; listOffset += 8) {
+                    const uintptr_t chunk = mem::Read<uintptr_t>(
+                        root + listOffset + 8ull * static_cast<uintptr_t>(knownIndex >> 9));
+                    if (!chunk)
+                        continue;
+                    for (uintptr_t stride : strides) {
+                        if (mem::Read<uintptr_t>(chunk + stride * static_cast<uintptr_t>(knownIndex & 0x1FF)) == knownPawn) {
+                            outSystem = root;
+                            outListOffset = listOffset;
+                            outStride = stride;
+                            return true;
+                        }
+                    }
+                }
+            }
+            // Handle был валидным, но ячейка с known pawn не найдена. Полный
+            // перебор здесь не даст более надёжного результата и слишком
+            // дорог для игрового потока.
+            return false;
+        }
+
+        // Если handle недоступен, ограниченный полный поиск остаётся только
+        // запасным путём. Его границы намеренно малы, чтобы не подвесить игру.
+        for (uintptr_t root : roots) {
+            if (!root || !mem::IsValidPtr(reinterpret_cast<const void*>(root), 0x20))
+                continue;
+            for (uintptr_t listOffset = 0; listOffset <= 0x80; listOffset += 8) {
+                for (int chunkIndex = 0; chunkIndex < kChunkCount; ++chunkIndex) {
+                    const uintptr_t chunk = mem::Read<uintptr_t>(
+                        root + listOffset + 8ull * static_cast<uintptr_t>(chunkIndex));
+                    if (!chunk)
+                        continue;
+                    for (uintptr_t stride : strides) {
+                        // До полного обхода исключаем адреса, которые не могут
+                        // вместить даже одну identity-запись.
+                        if (!mem::IsValidPtr(reinterpret_cast<const void*>(chunk), sizeof(uintptr_t)))
+                            continue;
+                        for (int entry = 0; entry < kEntriesPerChunk; ++entry) {
+                            const uintptr_t candidate = mem::Read<uintptr_t>(
+                                chunk + stride * static_cast<uintptr_t>(entry));
+                            if (candidate != knownPawn)
+                                continue;
+                            outSystem = root;
+                            outListOffset = listOffset;
+                            outStride = stride;
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     inline bool IsValidPlayerHandle(uint32_t handle) {
         const uint32_t index = handle & kHandleIndexMask;
         return handle != 0 && index != 0 && index != kInvalidHandleIndex;
