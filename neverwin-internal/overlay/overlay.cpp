@@ -71,6 +71,8 @@ namespace {
         int      raim = 0; // 0=off, 1=raimv1, 2=raimv2
         bool     al = false, vr = false, ab = false, gs = false;
         float    spin = 1.0f;
+        bool     rage = false;
+        int      rageTarget = 0; // 0=team, 1=nonteam
         uint32_t pendingCmd = 0;
         bool     dirty = false;
     } g_m;
@@ -280,6 +282,7 @@ namespace {
         const struct { const char* name; const char* val; bool on; } rows[] = {
             { "[F1] Реверс аим: наводка на тимейтов", raimName, st.reverseAim != 0 },
             { "[F2] Антиаимлесс: взгляд в пол",       spinBuf,  st.antiAimless != 0 },
+            { "[VL] Velocity аим",                    st.rageAim ? (st.rageTarget ? "nonteam" : "team") : "OFF", st.rageAim != 0 },
             { "[F3] Visual recoil x4",                "ON",     st.visualRecoil != 0 },
             { "[F4] Антибхоп",                        "ON",     st.antiBhop != 0 },
             { "[F5] Gamesense: дроп оружия",          "ON",     st.gamesense != 0 },
@@ -344,6 +347,21 @@ namespace {
         checkbox("Gamesense: дроп оружия [F5]",             nwshared::kFbGamesense,    g_m.gs);
 
         ImGui::Separator();
+        ImGui::TextDisabled("VELOCITY");
+        if (ImGui::Checkbox("Аимбот включён", &g_m.rage)) {
+            const uint32_t val = (g_m.rage ? nwshared::kFbRageOn : 0u) |
+                                 (g_m.rageTarget ? nwshared::kFbRageTarget : 0u);
+            g_m.pendingCmd = viewer.SendCommand(nwshared::kFbRageOn | nwshared::kFbRageTarget, val);
+        }
+        const char* tgtItems[] = { "Тимейты (team)", "Враги (nonteam)" };
+        if (ImGui::Combo("Цель аимбота", &g_m.rageTarget, tgtItems, 2)) {
+            const uint32_t val = (g_m.rage ? nwshared::kFbRageOn : 0u) |
+                                 (g_m.rageTarget ? nwshared::kFbRageTarget : 0u);
+            g_m.pendingCmd = viewer.SendCommand(nwshared::kFbRageOn | nwshared::kFbRageTarget, val);
+        }
+        ImGui::TextDisabled("FOV и сглаживание — во внутриигровом меню (вкладка VELOCITY)");
+
+        ImGui::Separator();
         ImGui::TextDisabled("client.dll  0x%llX", static_cast<unsigned long long>(st.clientBase));
         ImGui::TextDisabled("LocalPlayer 0x%llX  hp %d  team %d",
                             static_cast<unsigned long long>(st.localPlayer),
@@ -387,6 +405,8 @@ namespace {
         g_m.vr = st.visualRecoil != 0;
         g_m.ab = st.antiBhop != 0;
         g_m.gs = st.gamesense != 0;
+        g_m.rage = st.rageAim != 0;
+        g_m.rageTarget = st.rageTarget ? 1 : 0;
     }
 
     LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {

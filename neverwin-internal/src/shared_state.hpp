@@ -36,6 +36,8 @@ namespace nwshared {
         kFbGamesense    = 1u << 5, // F5
         kFbUnload       = 1u << 6, // команда: выгрузить DLL
         kFbSpinSpeed    = 1u << 7, // команда: скорость спинбота (значение в bits 8..15)
+        kFbRageOn       = 1u << 8, // VELOCITY: аимбот включён
+        kFbRageTarget   = 1u << 9, // VELOCITY: 0=team, 1=nonteam
     };
 
     struct State {
@@ -48,6 +50,8 @@ namespace nwshared {
         uint8_t  antiAimless;
         uint8_t  spinSpeed;       // 0..10, множитель спинбота F2
         uint8_t  visualRecoil;
+        uint8_t  rageAim;         // VELOCITY: аимбот
+        uint8_t  rageTarget;      // VELOCITY: 0=team, 1=nonteam
         uint8_t  antiBhop;
         uint8_t  gamesense;
         uint8_t  hudVisible;      // F6

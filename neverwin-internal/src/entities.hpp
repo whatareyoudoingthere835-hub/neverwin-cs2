@@ -31,6 +31,26 @@ namespace ent {
         return mem::Read<uintptr_t>(listEntry + offsets::g.entryStride * (index & 0x1FF));
     }
 
+    // Полный обход энтити-листа: ВСЕ 32 блока по 512 слотов.
+    // Сканирование только блока 0 (хэндлы 1..512) теряло игроков с большими
+    // хэндлами — «5 тиммейтов, видно 1» из лога. Пустые блоки пропускаются,
+    // так что обход стоит столько же, сколько сущностей в игре.
+    template <typename Fn>
+    inline void ForEachPawn(uintptr_t entityList, Fn&& fn) {
+        for (uint32_t block = 0; block < 32; ++block) {
+            const uintptr_t listEntry =
+                mem::Read<uintptr_t>(entityList + offsets::g.listEntryOffset + 8ull * block);
+            if (!listEntry)
+                continue;
+            for (uint32_t idx = 0; idx < 512; ++idx) {
+                const uintptr_t pawn =
+                    mem::Read<uintptr_t>(listEntry + offsets::g.entryStride * idx);
+                if (pawn)
+                    fn(pawn);
+            }
+        }
+    }
+
     // Глаза павна: abs origin из сцена-ноды + view offset.
     // m_vecViewOffset (C_BaseModelEntity, 0xE78) — тип CNetworkViewOffsetVector,
     // сетевой: при несовпадении билда/оффсета отдаёт не Vector, а мусор.

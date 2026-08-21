@@ -231,28 +231,29 @@ namespace {
 
         const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
 
-        for (uint32_t i = 1; i < 512; ++i) {
-            const uintptr_t pawn = ent::GetEntityByHandle(entityList, i);
-            if (!pawn || pawn == localPlayer)
-                continue;
+        // Полный обход всех блоков списка — иначе тиммейты с хэндлами выше
+        // 512 невидимы («5 тиммейтов, видно 1» из лога).
+        ent::ForEachPawn(entityList, [&](uintptr_t pawn) {
+            if (pawn == localPlayer)
+                return;
 
             ++stats.pawns;
             const uint8_t team = ent::GetTeam(pawn);
             if (team != localTeam) {
                 if (team != 0 && mem::Read<int>(pawn + off.m_iHealth) > 0)
                     ++stats.enemies;
-                continue;
+                return;
             }
 
             ++stats.teammates;
             const uintptr_t node = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
             if (!node)
-                continue;
+                return;
             ++stats.withNode;
 
             const ent::Vector3 origin = mem::Read<ent::Vector3>(node + off.m_vecAbsOrigin);
             if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
-                continue;
+                return;
             ++stats.withOrigin;
 
             const float dx = origin.x - eye.x;
@@ -263,13 +264,13 @@ namespace {
             // Ближе 64 юнитов (труп под камерой, тиммейт вплотную) — почти
             // вертикальные углы, бесполезно.
             if (d2 < 64.0f * 64.0f)
-                continue;
+                return;
 
             ++totalCount;
             // Живой: hp в разумных пределах. Трупы (hp=0) и мусор отсекаются.
             const int hp = mem::Read<int>(pawn + off.m_iHealth);
             if (hp <= 0 || hp > 1000)
-                continue;
+                return;
 
             ++aliveCount;
             if (d2 < bestDist2) {
@@ -278,7 +279,7 @@ namespace {
                 bestOrigin = origin;
                 bestHealth = hp;
             }
-        }
+        });
 
         if (bestPawn) {
             outOrigin = bestOrigin;
@@ -286,6 +287,74 @@ namespace {
             return true;
         }
         return false;
+    }
+
+    // ========================================================================
+    // Цель для вкладки VELOCITY: ближайший по FOV живой павн выбранной
+    // стороны (тимейты или враги), через стены. FOV считается как угол между
+    // текущим взглядом и направлением на цель.
+    // ========================================================================
+    bool FindRageTarget(uintptr_t localPlayer, uintptr_t entityList, uint8_t localTeam,
+                        bool wantEnemies, float maxFov,
+                        float curPitch, float curYaw,
+                        ent::Vector3& outOrigin, int& outHealth, float& outFov) {
+        const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
+        if (eye.x == 0.0f && eye.y == 0.0f && eye.z == 0.0f)
+            return false;
+
+        const float cp = curPitch / ent::kRadToDeg;
+        const float cy = curYaw / ent::kRadToDeg;
+        const ent::Vector3 fwd{ std::cosf(cp) * std::cosf(cy),
+                                std::cosf(cp) * std::sinf(cy),
+                                -std::sinf(cp) };
+
+        uintptr_t best = 0;
+        ent::Vector3 bestOrigin{};
+        float bestFov = FLT_MAX;
+        int bestHp = 0;
+
+        ent::ForEachPawn(entityList, [&](uintptr_t pawn) {
+            if (pawn == localPlayer)
+                return;
+            const uint8_t team = ent::GetTeam(pawn);
+            if (team == 0)
+                return;
+            if ((team != localTeam) != wantEnemies)
+                return;
+            const int hp = mem::Read<int>(pawn + off.m_iHealth);
+            if (hp <= 0 || hp > 1000)
+                return;
+            const uintptr_t node = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
+            if (!node)
+                return;
+            const ent::Vector3 origin = mem::Read<ent::Vector3>(node + off.m_vecAbsOrigin);
+            if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
+                return;
+
+            ent::Vector3 d{ origin.x - eye.x, origin.y - eye.y,
+                            origin.z + 64.0f - eye.z };
+            const float len = std::sqrtf(d.x * d.x + d.y * d.y + d.z * d.z);
+            if (len < 64.0f)
+                return;
+            d.x /= len; d.y /= len; d.z /= len;
+            float dot = fwd.x * d.x + fwd.y * d.y + fwd.z * d.z;
+            if (dot > 1.0f) dot = 1.0f;
+            if (dot < -1.0f) dot = -1.0f;
+            const float fov = std::acosf(dot) * ent::kRadToDeg;
+            if (fov <= maxFov && fov < bestFov) {
+                bestFov = fov;
+                best = pawn;
+                bestOrigin = origin;
+                bestHp = hp;
+            }
+        });
+
+        if (!best)
+            return false;
+        outOrigin = bestOrigin;
+        outHealth = bestHp;
+        outFov = bestFov;
+        return true;
     }
 }
 
@@ -374,6 +443,8 @@ void RunFeatureLoop() {
             shm->visualRecoil    = g_features.visualRecoil.load() ? 1u : 0u;
             shm->antiBhop        = g_features.antiBhop.load() ? 1u : 0u;
             shm->gamesense       = g_features.gamesense.load() ? 1u : 0u;
+            shm->rageAim         = g_features.rageAim.load() ? 1u : 0u;
+            shm->rageTarget      = static_cast<uint8_t>(g_features.rageTarget.load());
             shm->hudVisible      = gui::g_hudVisible.load() ? 1u : 0u;
             shm->menuOpen        = gui::g_menuOpen.load() ? 1u : 0u;
             shm->inGameMenu      = gui::g_inGameMenuReady.load() ? 1u : 0u;
@@ -410,6 +481,10 @@ void RunFeatureLoop() {
                     const uint32_t s = (val >> 8) & 0xFFu;
                     if (s <= 10)
                         g_features.spinSpeed.store(static_cast<float>(s));
+                }
+                if (mask & (nwshared::kFbRageOn | nwshared::kFbRageTarget)) {
+                    g_features.rageAim.store((val & nwshared::kFbRageOn) != 0);
+                    g_features.rageTarget.store((val & nwshared::kFbRageTarget) ? 1 : 0);
                 }
                 if ((mask & nwshared::kFbUnload) && (val & nwshared::kFbUnload))
                     gui::g_unloadRequested.store(true);
@@ -487,10 +562,10 @@ void RunFeatureLoop() {
         }
 
         // --- 4a. Реверс аим (F1): raimv1 / raimv2. ---
-        // Наводимся на ближайшего тиммейта всегда: стены не проверяются,
-        // дальность не ограничена, живой предпочтительнее трупа. Если живых
-        // нет — цель падает на ближайший труп тиммейта (пока он в списке).
-        const int raimMode = g_features.reverseAim.load();
+        // При включённом аимботе (VELOCITY) raim отключается — одна цель
+        // в один момент времени.
+        const bool rageOn = g_features.rageAim.load();
+        const int raimMode = rageOn ? 0 : g_features.reverseAim.load();
         if (raimMode != 0) {
             ent::Vector3 targetOrigin{};
             int targetHealth = 0;
@@ -565,18 +640,15 @@ void RunFeatureLoop() {
         // Тот же метод, что работал до переноса: прямая запись viewAngles.
         if (g_features.antiAimless.load()) {
             bool enemySpotted = false;
-            for (uint32_t i = 1; i < 512; ++i) {
-                const uintptr_t pawn = ent::GetEntityByHandle(entityList, i);
-                if (!pawn || pawn == localPlayer)
-                    continue;
+            ent::ForEachPawn(entityList, [&](uintptr_t pawn) {
+                if (enemySpotted || pawn == localPlayer)
+                    return;
 
                 const int enemyHealth = mem::Read<int>(pawn + off.m_iHealth);
                 const uint8_t enemyTeam = ent::GetTeam(pawn);
-                if (enemyHealth > 0 && enemyTeam != localTeam) {
+                if (enemyHealth > 0 && enemyTeam != localTeam)
                     enemySpotted = true;
-                    break;
-                }
-            }
+            });
 
             if (enemySpotted) {
                 const float spin = g_features.spinSpeed.load();
@@ -595,6 +667,67 @@ void RunFeatureLoop() {
                 if (!logged) {
                     NW_LOG(L"F2: враг виден — камера в пол + кручение (скорость x%.0f).", spin);
                     logged = true;
+                }
+            }
+        }
+
+        // --- 4c. Аимбот (вкладка VELOCITY): враги или тиммейты. ---
+        // Цель — ближайший по FOV живой павн выбранной стороны, через стены.
+        // Углы — той же математикой, что и raim; канал — юзеркоманда
+        // + подстраховка прямой записью viewAngles.
+        if (rageOn) {
+            const bool wantEnemies = g_features.rageTarget.load() != 0;
+            const float maxFov = g_features.rageFov.load();
+            const float curPitch = mem::Read<float>(viewAnglesPtr);
+            const float curYaw = mem::Read<float>(viewAnglesPtr + 4);
+
+            ent::Vector3 targetOrigin{};
+            int targetHealth = 0;
+            float targetFov = 0.0f;
+            if (FindRageTarget(localPlayer, entityList, localTeam, wantEnemies, maxFov,
+                               curPitch, curYaw, targetOrigin, targetHealth, targetFov)) {
+                const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
+                const ent::Vector3 target{ targetOrigin.x, targetOrigin.y,
+                                           targetOrigin.z + 64.0f };
+                ent::Vector2 want = ent::CalcAngles(eye, target);
+                ent::NormalizeAngles(want.x, want.y);
+
+                // Сглаживание: 1 = мгновенно, больше = плавнее.
+                const float smooth = g_features.rageSmooth.load();
+                float dY = want.y - curYaw;
+                if (dY > 180.0f) dY -= 360.0f;
+                if (dY < -180.0f) dY += 360.0f;
+                const float p = curPitch + (want.x - curPitch) / smooth;
+                const float y = curYaw + dY / smooth;
+
+                bool viaCmd = Raimv2WriteToCmd(clientBase, p, y);
+                if (!viaCmd) {
+                    ++g_cmdFails;
+                    if (g_cmdFails >= 30) {
+                        g_cmdFails = 0;
+                        g_cmdLayout.resolved = false; // перепроба
+                    }
+                }
+                mem::Write<float>(viewAnglesPtr, p);
+                mem::Write<float>(viewAnglesPtr + 4, y);
+
+                static uint32_t lastLog = 0;
+                const uint32_t now = GetTickCount();
+                if (now - lastLog > 5000) {
+                    lastLog = now;
+                    NW_LOG(L"velocity-aim: цель %s (%.0f %.0f %.0f) hp=%d, fov=%.1f°, углы (%.1f, %.1f)%s",
+                           wantEnemies ? L"враг" : L"тимейт",
+                           targetOrigin.x, targetOrigin.y, targetOrigin.z,
+                           targetHealth, targetFov, p, y,
+                           viaCmd ? L" — канал user cmd" : L" — канал viewAngles");
+                }
+            } else {
+                static uint32_t lastNone = 0;
+                const uint32_t now = GetTickCount();
+                if (now - lastNone > 5000) {
+                    lastNone = now;
+                    NW_LOG(L"velocity-aim: живой цели (%s) в FOV %.0f° нет.",
+                           wantEnemies ? L"враги" : L"тимейты", maxFov);
                 }
             }
         }
