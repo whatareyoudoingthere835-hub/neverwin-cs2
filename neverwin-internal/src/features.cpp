@@ -725,6 +725,38 @@ void RunFeatureLoop() {
                            health, mem::Read<uint8_t>(localPlayer + off.m_lifeState),
                            static_cast<int>(localTeam), eyeDbg.x, eyeDbg.y, eyeDbg.z);
 
+                    // Raw-диагностика именно той цепочки, которая сейчас
+                    // ломается на клиенте: controller handle -> entity-list.
+                    // Пишется только при отсутствии целей и не меняет память.
+                    auto logHandleLookup = [&](int slot, uintptr_t controller, const wchar_t* field, uint32_t handle) {
+                        const uint32_t index = handle & ent::kHandleIndexMask;
+                        const uintptr_t entryAddress = entityList + off.listEntryOffset +
+                            8ull * static_cast<uintptr_t>(index >> 9);
+                        const uintptr_t chunk = index ? mem::Read<uintptr_t>(entryAddress) : 0;
+                        const uintptr_t elementAddress = chunk
+                            ? chunk + off.entryStride * static_cast<uintptr_t>(index & 0x1FF) : 0;
+                        const uintptr_t resolved = elementAddress
+                            ? mem::Read<uintptr_t>(elementAddress) : 0;
+                        NW_LOG(L"raim lookup: slot %d ctrl=0x%llX %s handle=0x%08X idx=%u entry@0x%llX chunk=0x%llX elem@0x%llX pawn=0x%llX",
+                               slot, static_cast<unsigned long long>(controller), field, handle, index,
+                               static_cast<unsigned long long>(entryAddress),
+                               static_cast<unsigned long long>(chunk),
+                               static_cast<unsigned long long>(elementAddress),
+                               static_cast<unsigned long long>(resolved));
+                    };
+
+                    for (int slot = ent::kFirstPlayerSlot; slot <= ent::kMaxPlayerSlots; ++slot) {
+                        const uintptr_t controller = ent::GetEntityByIndex(entityList, static_cast<uint32_t>(slot));
+                        if (!controller)
+                            continue;
+                        const uint32_t playerPawn = mem::Read<uint32_t>(controller + off.m_hPlayerPawn);
+                        const uint32_t basePawn = mem::Read<uint32_t>(controller + off.m_hPawn);
+                        if (ent::IsValidPlayerHandle(playerPawn))
+                            logHandleLookup(slot, controller, L"m_hPlayerPawn", playerPawn);
+                        if (basePawn != playerPawn && ent::IsValidPlayerHandle(basePawn))
+                            logHandleLookup(slot, controller, L"m_hPawn", basePawn);
+                    }
+
                     // test-режим: проверяем канал юзеркоманды даже без цели —
                     // проба раскладки против живых viewAngles.
                     if (raimMode == 3) {
