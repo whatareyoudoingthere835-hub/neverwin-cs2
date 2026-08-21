@@ -174,7 +174,10 @@ namespace systems {
 			return 0;
 		}
 
-		return memory::read<std::uintptr_t>( list_entry + ( static_cast< std::uintptr_t >( index & 0x1ff ) * 112 ) );
+		// Source 2: entry stride 0x78 = 120 байт (а не 112). 112 — старый оффсет из
+		// 2023 года, из-за него lookup возвращал мусорные указатели → health=0
+		// → аимбот считал всех мертвыми.
+		return memory::read<std::uintptr_t>( list_entry + ( static_cast< std::uintptr_t >( index & 0x1ff ) * 120 ) );
 	}
 
 	std::uintptr_t entities::lookup( std::uint32_t handle ) const
@@ -196,7 +199,8 @@ namespace systems {
 			return 0;
 		}
 
-		const auto entity = memory::read<std::uintptr_t>( list_entry + ( static_cast< std::uintptr_t >( handle & 0x1ff ) * 112 ) );
+		// 0x78 = 120, фикс страйда (было 112)
+		const auto entity = memory::read<std::uintptr_t>( list_entry + ( static_cast< std::uintptr_t >( handle & 0x1ff ) * 120 ) );
 		if ( !entity || entity == 0xffffffffffffffff || entity < 0x10000 )
 		{
 			return 0;

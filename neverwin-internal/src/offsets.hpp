@@ -30,6 +30,7 @@ namespace offsets {
 
         // --- CGameSceneNode ---
         std::uintptr_t m_vecAbsOrigin    = 0xC8;   // Vector (абсолютная позиция)
+        std::uintptr_t m_bDormant        = 0x103;  // bool (дормант — игрок вне PVS, хп может быть 0)
 
         // --- C_BasePlayerPawn ---
         std::uintptr_t m_pCameraServices = 0x1240; // CPlayer_CameraServices*

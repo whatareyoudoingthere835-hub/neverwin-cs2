@@ -263,6 +263,11 @@ namespace {
                 return;
             ++stats.withNode;
 
+            // Дормант — игрок вне PVS, у него хп может быть 0 и origin старый.
+            // Скипаем дормант, иначе считаем мертвых/мусор за живых.
+            if (mem::Read<uint8_t>(node + off.m_bDormant) != 0)
+                return;
+
             const ent::Vector3 origin = mem::Read<ent::Vector3>(node + off.m_vecAbsOrigin);
             if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
                 return;
@@ -279,7 +284,11 @@ namespace {
                 return;
 
             ++totalCount;
-            // Живой: hp в разумных пределах. Трупы (hp=0) и мусор отсекаются.
+            // Живой: hp в разумных пределах + lifeState == 0 (LIFE_ALIVE).
+            // Раньше проверяли только hp — из-за дорманта/битых ридов hp=0
+            // и всех считали мертвыми. Теперь проверяем и lifeState.
+            if (mem::Read<uint8_t>(pawn + off.m_lifeState) != 0)
+                return;
             const int hp = mem::Read<int>(pawn + off.m_iHealth);
             if (hp <= 0 || hp > 1000)
                 return;
@@ -542,9 +551,17 @@ void RunFeatureLoop() {
                 if (enemySpotted || pawn == localPlayer)
                     return;
 
+                // Скипаем дормант и мертвых — иначе F2 триггерил на трупы/мусор
+                const uintptr_t eNode = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
+                if (eNode && mem::Read<uint8_t>(eNode + off.m_bDormant) != 0)
+                    return;
+                if (mem::Read<uint8_t>(pawn + off.m_lifeState) != 0)
+                    return;
                 const int enemyHealth = mem::Read<int>(pawn + off.m_iHealth);
+                if (enemyHealth <= 0 || enemyHealth > 1000)
+                    return;
                 const uint8_t enemyTeam = ent::GetTeam(pawn);
-                if (enemyHealth > 0 && enemyTeam != localTeam)
+                if (enemyTeam != localTeam && enemyTeam != 0)
                     enemySpotted = true;
             });
 

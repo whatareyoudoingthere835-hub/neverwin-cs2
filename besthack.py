@@ -24,6 +24,7 @@ m_bInReload = 0x1814
 # --- Позиции (реверс аимбот) ---
 m_pGameSceneNode = 0x330    # C_BaseEntity -> CGameSceneNode*
 m_vecAbsOrigin = 0xC8       # CGameSceneNode -> Vector
+m_bDormant = 0x103          # CGameSceneNode -> bool (дормант)
 m_vecViewOffset = 0xE78     # C_BaseModelEntity -> Vector (высота глаз)
 
 # --- Сервисы ---
@@ -79,14 +80,22 @@ keyboard.on_press_key("F8", spin_speed_up)
 
 
 def iter_pawns(pm, entity_list):
-    # Полный обход энтити-листа: ВСЕ 32 блока по 512 слотов.
-    # Скан только блока 0 (хэндлы 1..512) терял игроков с большими хэндлами.
-    for block in range(32):
-        list_entry = pm.read_longlong(entity_list + 0x10 + 8 * block)
+    # Полный обход энтити-листа: ВСЕ 64 блока по 512 слотов (32768 слотов).
+    # Раньше было 32 блока — теряли игроков с хэндлами >= 0x4000 (блоки 32..63).
+    # Именно из-за этого было «5 тиммейтов, видно 1».
+    # Страйд 0x78 = 120 байт — как в C++ версии (entities.hpp).
+    for block in range(64):
+        try:
+            list_entry = pm.read_longlong(entity_list + 0x10 + 8 * block)
+        except Exception:
+            continue
         if not list_entry:
             continue
         for idx in range(512):
-            pawn = pm.read_longlong(list_entry + 120 * idx)
+            try:
+                pawn = pm.read_longlong(list_entry + 120 * idx)
+            except Exception:
+                continue
             if pawn:
                 yield pawn
 
@@ -215,17 +224,32 @@ def neverwin_loop():
                     for pawn in iter_pawns(pm, entity_list):
                         if pawn == local_player:
                             continue
-                        if (pm.read_uint(pawn + m_iTeamNum) & 0xFF) != local_team:  # uint8
+                        try:
+                            if (pm.read_uint(pawn + m_iTeamNum) & 0xFF) != local_team:  # uint8
+                                continue
+                        except Exception:
                             continue
 
-                        node = pm.read_longlong(pawn + m_pGameSceneNode)
+                        try:
+                            node = pm.read_longlong(pawn + m_pGameSceneNode)
+                        except Exception:
+                            continue
                         if not node:
                             continue
-                        origin = [
-                            pm.read_float(node + m_vecAbsOrigin),
-                            pm.read_float(node + m_vecAbsOrigin + 4),
-                            pm.read_float(node + m_vecAbsOrigin + 8),
-                        ]
+                        # Дормант — скипаем, иначе хп=0 и считаем всех мертвыми
+                        try:
+                            if pm.read_bool(node + m_bDormant):
+                                continue
+                        except Exception:
+                            pass
+                        try:
+                            origin = [
+                                pm.read_float(node + m_vecAbsOrigin),
+                                pm.read_float(node + m_vecAbsOrigin + 4),
+                                pm.read_float(node + m_vecAbsOrigin + 8),
+                            ]
+                        except Exception:
+                            continue
                         if origin == [0.0, 0.0, 0.0]:
                             continue
 
@@ -238,8 +262,15 @@ def neverwin_loop():
                         if dist2 < 64.0 * 64.0:
                             continue
 
-                        life = pm.read_uint(pawn + m_lifeState) & 0xFF
-                        if life == 0 and pm.read_int(pawn + m_iHealth) > 0 and dist2 < best_alive_dist:
+                        try:
+                            life = pm.read_uint(pawn + m_lifeState) & 0xFF
+                            hp = pm.read_int(pawn + m_iHealth)
+                        except Exception:
+                            continue
+                        # Живой только если lifeState==0 и hp>0 и hp<=1000
+                        if life != 0 or hp <= 0 or hp > 1000:
+                            continue
+                        if dist2 < best_alive_dist:
                             best_alive_dist = dist2
                             best_alive = origin
                         if dist2 < best_any_dist:
@@ -269,13 +300,23 @@ def neverwin_loop():
                 for pawn in iter_pawns(pm, entity_list):
                     if pawn == local_player:
                         continue
+                    try:
+                        node = pm.read_longlong(pawn + m_pGameSceneNode)
+                        if node and pm.read_bool(node + m_bDormant):
+                            continue
+                        if pm.read_uint(pawn + m_lifeState) & 0xFF:
+                            continue
+                        health = pm.read_int(pawn + m_iHealth)
+                        if health <= 0 or health > 1000:
+                            continue
+                        team = pm.read_uint(pawn + m_iTeamNum) & 0xFF  # uint8
+                        if team == 0 or team == local_team:
+                            continue
+                    except Exception:
+                        continue
 
-                    health = pm.read_int(pawn + m_iHealth)
-                    team = pm.read_uint(pawn + m_iTeamNum) & 0xFF  # uint8
-
-                    if health > 0 and team != local_team:
-                        enemy_spotted = True
-                        break
+                    enemy_spotted = True
+                    break
 
                 if enemy_spotted:
                     # Жестко уводим в пол

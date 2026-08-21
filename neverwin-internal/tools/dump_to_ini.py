@@ -33,7 +33,7 @@ NET_KEYS = ("dwEntityList", "dwLocalPlayerPawn", "dwViewAngles",
 CLASS_KEYS = {
     "C_BaseEntity":           ("m_iHealth", "m_lifeState", "m_iTeamNum", "m_fFlags", "m_pGameSceneNode"),
     "C_BaseModelEntity":      ("m_vecViewOffset",),
-    "CGameSceneNode":         ("m_vecAbsOrigin",),
+    "CGameSceneNode":         ("m_vecAbsOrigin", "m_bDormant"),
     "C_BasePlayerPawn":       ("m_pCameraServices", "m_pWeaponServices"),
     "CBasePlayerController":  ("m_CommandContext",),
     "CPlayer_CameraServices": ("m_vecCsViewPunchAngle",),

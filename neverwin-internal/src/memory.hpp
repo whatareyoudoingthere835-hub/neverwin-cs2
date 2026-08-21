@@ -11,40 +11,68 @@
 // ============================================================================
 namespace mem {
 
-    // Проверяет, что диапазон [ptr, ptr + size) целиком лежит в одном
-    // committed-регионе и не помечен PAGE_NOACCESS / PAGE_GUARD.
+    // Проверяет, что диапазон [ptr, ptr + size) целиком лежит в committed-памяти
+    // и не помечен PAGE_NOACCESS / PAGE_GUARD. В отличие от старой версии,
+    // которая требовала уместиться в ОДИН регион (и падала на объектах у края
+    // региона — team 0x3E7 / viewOffset 0xE78 часто вылетали за границу),
+    // эта версия проходит по цепочке регионов и проверяет каждый.
     inline bool IsValidPtr(const void* ptr, size_t size) {
         if (ptr == nullptr || size == 0)
             return false;
 
-        MEMORY_BASIC_INFORMATION mbi{};
-        if (VirtualQuery(ptr, &mbi, sizeof(mbi)) == 0)
-            return false;
-        if (mbi.State != MEM_COMMIT)
-            return false;
-        if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))
-            return false;
+        uintptr_t start = reinterpret_cast<uintptr_t>(ptr);
+        uintptr_t end = start + size;
 
-        const uintptr_t regionEnd = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
-        const uintptr_t rangeEnd  = reinterpret_cast<uintptr_t>(ptr) + size;
-        return rangeEnd <= regionEnd;
+        while (start < end) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            if (VirtualQuery(reinterpret_cast<LPCVOID>(start), &mbi, sizeof(mbi)) == 0)
+                return false;
+            if (mbi.State != MEM_COMMIT)
+                return false;
+            if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))
+                return false;
+            // PAGE_READONLY, READWRITE, EXECUTE_READ и т.д. — читаемы.
+            // Если регион нечитаем (например, PAGE_NOACCESS уже отсеяли),
+            // но защита 0 — тоже невалид.
+            if (mbi.Protect == 0)
+                return false;
+
+            uintptr_t regionEnd = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+            if (regionEnd <= start) // защита от бесконечного цикла
+                return false;
+            if (regionEnd > end)
+                regionEnd = end;
+            start = regionEnd;
+        }
+        return true;
     }
 
     // Безопасное чтение. Если память невалидна — возвращает T{} (нули).
-    // Ни исключений, ни крешей.
+    // Двойная защита: сначала VirtualQuery-цепочка, потом SEH — если между
+    // проверкой и чтением регион успели освободить, не уроним игру.
     template <typename T>
     inline T Read(uintptr_t addr) {
+        if (addr == 0)
+            return T{};
+        // Быстрая проверка — но даже если она прошла, чтение под SEH.
         if (!IsValidPtr(reinterpret_cast<const void*>(addr), sizeof(T)))
             return T{};
-        return *reinterpret_cast<const T*>(addr);
+        __try {
+            return *reinterpret_cast<const T*>(addr);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return T{};
+        }
     }
 
     // Безопасная запись. Если регион read-only (например, секция с viewAngles) —
     // делает его writable. Повторный VirtualProtect для того же адреса
     // не выполняется (кэш последнего региона). Кэш thread_local: теперь
     // пишут ДВА потока (цикл фич и хук CreateMove) — общий кэш был бы гонкой.
+    // Письмо тоже под SEH — если регион умер между проверкой и записью.
     template <typename T>
     inline bool Write(uintptr_t addr, const T& value) {
+        if (addr == 0)
+            return false;
         if (!IsValidPtr(reinterpret_cast<void*>(addr), sizeof(T)))
             return false;
 
@@ -52,13 +80,21 @@ namespace mem {
         static thread_local size_t    s_lastSize = 0;
         if (s_lastAddr != addr || s_lastSize != sizeof(T)) {
             DWORD oldProtect = 0;
-            if (!VirtualProtect(reinterpret_cast<void*>(addr), sizeof(T), PAGE_READWRITE, &oldProtect))
+            __try {
+                if (!VirtualProtect(reinterpret_cast<void*>(addr), sizeof(T), PAGE_READWRITE, &oldProtect))
+                    return false;
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
                 return false;
+            }
             s_lastAddr = addr;
             s_lastSize = sizeof(T);
         }
 
-        *reinterpret_cast<T*>(addr) = value;
-        return true;
+        __try {
+            *reinterpret_cast<T*>(addr) = value;
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
     }
 }

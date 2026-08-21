@@ -49,6 +49,7 @@ namespace offsets {
         o.m_pGameSceneNode  = ReadHex(L"m_pGameSceneNode",  o.m_pGameSceneNode);
         o.m_vecViewOffset   = ReadHex(L"m_vecViewOffset",   o.m_vecViewOffset);
         o.m_vecAbsOrigin    = ReadHex(L"m_vecAbsOrigin",    o.m_vecAbsOrigin);
+        o.m_bDormant        = ReadHex(L"m_bDormant",        o.m_bDormant);
         o.m_pCameraServices = ReadHex(L"m_pCameraServices", o.m_pCameraServices);
         o.m_pWeaponServices = ReadHex(L"m_pWeaponServices", o.m_pWeaponServices);
         o.m_CommandContext  = ReadHex(L"m_CommandContext",  o.m_CommandContext);
