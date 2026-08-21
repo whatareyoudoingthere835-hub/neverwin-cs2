@@ -19,7 +19,31 @@ namespace {
 
 #if defined( DEV )
 	static HMODULE s_velocity_module = nullptr;
-	static FILE* s_log = nullptr;
+
+	// Лог на чистом kernel32 (без CRT-файловых функций): CreateFileW +
+	// WriteFile. Пишется сразу в два места — рядом с DLL и в %TEMP% —
+	// чтобы диагностика выжила при любом способе маппинга.
+	static void log_file_write( const wchar_t* path, const char* msg )
+	{
+		const HANDLE f = CreateFileW( path, FILE_APPEND_DATA, FILE_SHARE_READ,
+		                              nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr );
+		if ( f == INVALID_HANDLE_VALUE )
+			return;
+
+		char line [512] {};
+		const char* p = "[velocity] ";
+		std::size_t n = 0;
+		for ( ; *p && n + 1 < sizeof( line ); ++n )
+			line [n] = *p++;
+		for ( ; *msg && n + 2 < sizeof( line ); ++n )
+			line [n] = *msg++;
+		line [n++] = '\r';
+		line [n++] = '\n';
+
+		DWORD written = 0;
+		WriteFile( f, line, static_cast<DWORD>( n ), &written, nullptr );
+		CloseHandle( f );
+	}
 
 	void init_log( const char* msg )
 	{
@@ -27,29 +51,22 @@ namespace {
 		OutputDebugStringA( msg );
 		OutputDebugStringA( "\n" );
 
-		// Диагностика: DEV-сборка пишет инициализацию в velocity.log.
-		// Путь берётся из hModule (работает и при ручном маппинге, когда
-		// GetModuleHandleW на саму DLL даёт NULL); если путь получить не
-		// удалось — фолбэк в %TEMP%\velocity.log.
-		if ( !s_log ) {
-			wchar_t path [MAX_PATH] {};
-			if ( s_velocity_module )
-				GetModuleFileNameW( s_velocity_module, path, MAX_PATH );
+		wchar_t path [MAX_PATH] {};
 
-			if ( path [0] && GetFileAttributesW( path ) != INVALID_FILE_ATTRIBUTES ) {
-				wchar_t* slash = wcsrchr( path, L'\\' );
-				if ( slash )
-					wcscpy( slash + 1, L"velocity.log" );
-			} else {
-				GetTempPathW( MAX_PATH, path );
-				wcscat( path, L"velocity.log" );
+		// 1) рядом с DLL (работает, если маппер зарегистрировал LDR-запись)
+		if ( s_velocity_module && GetModuleFileNameW( s_velocity_module, path, MAX_PATH ) ) {
+			wchar_t* slash = wcsrchr( path, L'\\' );
+			if ( slash ) {
+				wcscpy( slash + 1, L"velocity.log" );
+				log_file_write( path, msg );
 			}
-
-			s_log = _wfopen( path, L"a" );
 		}
-		if ( s_log ) {
-			fprintf( s_log, "[velocity] %s\n", msg );
-			fflush( s_log );
+
+		// 2) фолбэк — %TEMP%\velocity.log
+		path [0] = 0;
+		if ( GetTempPathW( MAX_PATH, path ) ) {
+			wcscat( path, L"velocity.log" );
+			log_file_write( path, msg );
 		}
 	}
 
