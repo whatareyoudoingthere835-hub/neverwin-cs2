@@ -65,9 +65,10 @@ namespace {
         if (GetAsyncKeyState(VK_F4) & 1) g_features.antiBhop.store(!g_features.antiBhop.load());
         if (GetAsyncKeyState(VK_F5) & 1) g_features.gamesense.store(!g_features.gamesense.load());
         if (GetAsyncKeyState(VK_F6) & 1) gui::g_hudVisible.store(!gui::g_hudVisible.load());
-        if (GetAsyncKeyState(VK_INSERT) & 1) gui::g_menuOpen.store(!gui::g_menuOpen.load());
-        // END — выгрузка: выставляет флаг, цикл фич завершается и
-        // gui::ShutdownAndExit снимает хуки и освобождает DLL.
+        if (GetAsyncKeyState('P') & 1)  gui::g_menuOpen.store(!gui::g_menuOpen.load());
+        if (GetAsyncKeyState(VK_INSERT) & 1) gui::g_menuOpen.store(!gui::g_menuOpen.load()); // запасной
+        // END — выгрузка: выставляет флаг, цикл фич завершается,
+        // ShutdownAndExit освобождает DLL.
         if (GetAsyncKeyState(VK_END) & 1) gui::g_unloadRequested.store(true);
     }
 
@@ -146,6 +147,7 @@ void RunFeatureLoop() {
 
     int previousAmmo = -1;
     Vector2 oldPunch{};
+    uint32_t lastAppliedCmd = 0; // последняя применённая команда оверлея
 
     for (;;) {
         Sleep(1);
@@ -176,7 +178,7 @@ void RunFeatureLoop() {
         const int localTeam = mem::Read<int>(localPlayer + off.m_iTeamNum);
         g_state.localTeam.store(localTeam);
 
-        // Снапшот состояния для внешнего HUD-оверлея.
+        // Снапшот состояния для внешнего оверлея + приём его команд.
         if (shm) {
             shm->antiAimbot      = g_features.antiAimbot.load() ? 1u : 0u;
             shm->antiAimless     = g_features.antiAimless.load() ? 1u : 0u;
@@ -193,6 +195,29 @@ void RunFeatureLoop() {
             shm->localTeam       = localTeam;
             shm->viewAnglesWritable = g_state.viewAnglesWritable.load() ? 1u : 0u;
             shm->offsetsFromIni     = g_state.offsetsFromIni.load() ? 1u : 0u;
+
+            // Команды из меню оверлея (чекбоксы / кнопка выгрузки).
+            const uint32_t cmd = shm->cmdSeq;
+            if (cmd != lastAppliedCmd && shm->setMask != 0u) {
+                const uint32_t mask = shm->setMask;
+                const uint32_t val  = shm->setValues;
+                if (mask & nwshared::kFbAntiAimbot)
+                    g_features.antiAimbot.store((val & nwshared::kFbAntiAimbot) != 0);
+                if (mask & nwshared::kFbAntiAimless)
+                    g_features.antiAimless.store((val & nwshared::kFbAntiAimless) != 0);
+                if (mask & nwshared::kFbVisualRecoil)
+                    g_features.visualRecoil.store((val & nwshared::kFbVisualRecoil) != 0);
+                if (mask & nwshared::kFbAntiBhop)
+                    g_features.antiBhop.store((val & nwshared::kFbAntiBhop) != 0);
+                if (mask & nwshared::kFbGamesense)
+                    g_features.gamesense.store((val & nwshared::kFbGamesense) != 0);
+                if ((mask & nwshared::kFbUnload) && (val & nwshared::kFbUnload))
+                    gui::g_unloadRequested.store(true);
+
+                lastAppliedCmd = cmd;
+                shm->appliedSeq = cmd;
+            }
+
             shm.Commit();
         }
 

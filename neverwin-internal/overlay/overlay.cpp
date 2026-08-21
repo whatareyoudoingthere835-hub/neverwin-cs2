@@ -1,200 +1,432 @@
 // ============================================================================
-// NEVERWIN — внешний HUD-оверлей.
+// NEVERWIN — внешний оверлей: меню и HUD на DirectX 12 (ImGui + D3D12).
 //
-// Не инжектится в игру: рисует собственное окно поверх (topmost, layered,
-// click-through) и читает состояние DLL из shared memory (shared_state.hpp).
-// Работает при любом рендерере — DX11 и Vulkan. Ограничение: игра должна
-// быть в оконном или borderless-режиме; поверх exclusive fullscreen
+// Ничего не инжектит: собственное окно (topmost, click-through когда меню
+// закрыто) поверх игры, состояние и команды — через shared memory
+// (shared_state.hpp). Работает при любом рендерере CS2 — DX11 и Vulkan.
+// Игра должна быть в оконном/borderless-режиме: поверх exclusive fullscreen
 // внешнее окно не встанет.
 //
-// Жизненный цикл:
-//   ждёт neverwin.dll -> рисует HUD -> после END (выгрузки DLL) показывает
-//   "DLL выгружена" и закрывается через 3 секунды.
-// Управление HUD: F6 в игре (флаг читается из shared memory).
+// Управление:
+//   P  — открыть/закрыть меню (кнопку читает DLL, оверлей отражает)
+//   F6 — скрыть/показать HUD
+//   Чекбоксы в меню — реальные тогглы фич (команды уходят в DLL).
+//   После END (выгрузки DLL) оверлей показывает "DLL выгружена" и выходит.
+//
+// Окно без WS_EX_LAYERED: прозрачность через DWM per-pixel alpha
+// (DXGI_ALPHA_MODE_PREMULTIPLIED), фон очищается в (0,0,0,0).
 // ============================================================================
-// user32 макросит DrawText/DrawTextEx в DrawTextW — если не снять ДО d2d1.h,
-// макрос переименует и сам метод ID2D1RenderTarget::DrawText в заголовке.
 #include <windows.h>
-#undef DrawText
-#undef DrawTextEx
+#include <d3d12.h>
+#include <dxgi1_4.h>
+#include <dxgi1_2.h>
 
-#include <d3d11.h>
-#include <d2d1.h>
-#include <dwrite.h>
-#pragma comment(lib, "d2d1")
-#pragma comment(lib, "dwrite")
-#pragma comment(lib, "d3d11")
+#include "imgui.h"
+#include "backends/imgui_impl_win32.h"
+#include "backends/imgui_impl_dx12.h"
 
 #include <cstdio>
 #include <cstring>
 
 #include "shared_state.hpp"
 
+#ifndef IID_PPV_ARGS
+#define IID_PPV_ARGS(ppType) __uuidof(**(ppType)), reinterpret_cast<void**>(ppType)
+#endif
+
+// В imgui 1.93 WIP декларация WndProcHandler убрана из заголовка в #if 0
+// (чтобы не тащить windows.h) — объявляем сами, функция не static.
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
 namespace {
 
-    constexpr int   kWidth  = 430;
-    constexpr int   kHeight = 330;
-    constexpr int   kPosX   = 14;
-    constexpr int   kPosY   = 14;
-    constexpr UINT8 kAlpha  = 240; // глобальная непрозрачность окна (0-255)
+    constexpr int    kWidth      = 440;
+    constexpr int    kHeight     = 350;
+    constexpr int    kPosX       = 14;
+    constexpr int    kPosY       = 14;
+    constexpr UINT   kNumFrames  = 3; // свопчейн-буферов и кадров в полёте
 
-    struct Gfx {
-        IDXGISwapChain*       sc    = nullptr;
-        ID3D11Device*         dev   = nullptr;
-        ID3D11DeviceContext*  ctx   = nullptr;
-        ID2D1Factory*         d2d   = nullptr;
-        ID2D1RenderTarget*    rt    = nullptr;
-        IDWriteFactory*       dw    = nullptr;
-        IDWriteTextFormat*    title = nullptr;
-        IDWriteTextFormat*    row   = nullptr;
-        IDWriteTextFormat*    small = nullptr;
-        ID2D1SolidColorBrush* text  = nullptr;
-        ID2D1SolidColorBrush* on    = nullptr;
-        ID2D1SolidColorBrush* off   = nullptr;
-        ID2D1SolidColorBrush* dim   = nullptr;
-        ID2D1SolidColorBrush* panel = nullptr;
-    } g;
+    struct FrameCtx {
+        ID3D12CommandAllocator* allocator = nullptr;
+        ID3D12Fence*            fence     = nullptr;
+        UINT64                  fenceVal  = 0;
+        HANDLE                  event     = nullptr;
+    };
 
-    void ReleaseGfx() {
-        const auto rel = [](IUnknown* p) { if (p) p->Release(); };
-        rel(g.panel); rel(g.dim); rel(g.off); rel(g.on); rel(g.text);
-        rel(g.small); rel(g.row); rel(g.title); rel(g.dw); rel(g.rt); rel(g.d2d);
-        rel(g.ctx); rel(g.dev); rel(g.sc);
-        g = {};
+    HWND                    g_hwnd      = nullptr;
+    IDXGISwapChain1*        g_sc        = nullptr;
+    ID3D12Device*           g_dev       = nullptr;
+    ID3D12CommandQueue*     g_queue     = nullptr;
+    ID3D12GraphicsCommandList* g_cmd       = nullptr;
+    ID3D12DescriptorHeap*   g_rtvHeap   = nullptr;
+    ID3D12DescriptorHeap*   g_srvHeap   = nullptr;
+    UINT                    g_rtvSize   = 0;
+    FrameCtx                g_frames[kNumFrames];
+    UINT                    g_frameIdx  = 0;
+    UINT64                  g_fenceCnt  = 0;
+
+    // Локальные зеркала фич: чтобы чекбоксы не дёргались, пока команда
+    // летит до DLL и назад.
+    struct MenuMirror {
+        bool     aa = false, al = false, vr = false, ab = false, gs = false;
+        uint32_t pendingCmd = 0;
+        bool     dirty = false;
+    } g_m;
+
+    bool g_clickThrough = true;
+
+    // --- SRV-дескрипторы для текстур ImGui ---
+    // Бэкенд 1.93 сам запрашивает дескриптор через колбэк (фонт и т.п.).
+    // Кольцо: каждому кадру — своё окно из kSrvPerFrame дескрипторов; к моменту
+    // возврата окна фенс гарантирует, что GPU дескрипторы уже не держит.
+    constexpr UINT kSrvPerFrame = 4;
+    UINT g_srvHeapCount = 0;
+    UINT g_srvCursor    = 0;
+
+    void SrvAlloc(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE* outCpu,
+                  D3D12_GPU_DESCRIPTOR_HANDLE* outGpu) {
+        const UINT inc = g_dev->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        const UINT slot = (g_srvCursor++) % g_srvHeapCount;
+        outCpu->ptr = g_srvHeap->GetCPUDescriptorHandleForHeapStart().ptr + static_cast<SIZE_T>(slot) * inc;
+        outGpu->ptr = g_srvHeap->GetGPUDescriptorHandleForHeapStart().ptr + static_cast<SIZE_T>(slot) * inc;
+    }
+    void SrvFree(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE) {
+        // кольцо — освобождение не нужно
     }
 
-    bool InitGfx(HWND hwnd) {
-        DXGI_SWAP_CHAIN_DESC sd{};
-        sd.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-        sd.SampleDesc.Count  = 1;
-        sd.BufferUsage       = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        sd.BufferCount       = 1;
-        sd.OutputWindow      = hwnd;
-        sd.Windowed          = TRUE;
+    void SetClickThrough(bool on) {
+        if (g_clickThrough == on)
+            return;
+        g_clickThrough = on;
+        LONG_PTR ex = GetWindowLongPtrW(g_hwnd, GWL_EXSTYLE);
+        if (on) ex |= WS_EX_TRANSPARENT;
+        else    ex &= ~WS_EX_TRANSPARENT;
+        SetWindowLongPtrW(g_hwnd, GWL_EXSTYLE, ex);
+    }
 
-        D3D_FEATURE_LEVEL lvl = D3D_FEATURE_LEVEL_11_0;
-        if (FAILED(D3D11CreateDeviceAndSwapChain(
-                nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0,
-                D3D11_SDK_VERSION, &sd, &g.sc, &g.dev, &lvl, &g.ctx)))
+    // --- шрифт с кириллицей (встроенный у ImGui русский не рисует) ---
+    void SetupFonts() {
+        const wchar_t* candidates[] = {
+            L"C:\\Windows\\Fonts\\segoeui.ttf",
+            L"C:\\Windows\\Fonts\\arial.ttf",
+        };
+        ImFontConfig cfg{};
+        cfg.PixelSnapH = true;
+        for (const wchar_t* path : candidates) {
+            if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES)
+                continue;
+            char utf8[MAX_PATH * 2]{};
+            WideCharToMultiByte(CP_UTF8, 0, path, -1, utf8, sizeof(utf8), nullptr, nullptr);
+            ImGui::GetIO().Fonts->AddFontFromFileTTF(utf8, 16.0f, &cfg,
+                                                     ImGui::GetIO().Fonts->GetGlyphRangesCyrillic());
+            return;
+        }
+    }
+
+    bool InitD3D12() {
+        if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&g_dev)))) {
+            // Фолбэк на WARP (софтвер) — меню будет жить даже без видеодрайвера.
+            IDXGIFactory4* f4 = nullptr;
+            if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&f4))) && f4) {
+                IDXGIAdapter* warp = nullptr;
+                if (SUCCEEDED(f4->EnumWarpAdapter(IID_PPV_ARGS(&warp))) && warp) {
+                    D3D12CreateDevice(warp, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&g_dev));
+                    warp->Release();
+                }
+                f4->Release();
+            }
+        }
+        if (!g_dev)
             return false;
 
-        if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &g.d2d)))
+        D3D12_COMMAND_QUEUE_DESC qd{};
+        qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        if (FAILED(g_dev->CreateCommandQueue(&qd, IID_PPV_ARGS(&g_queue))))
             return false;
 
-        IDXGISurface* surface = nullptr;
-        if (FAILED(g.sc->GetBuffer(0, __uuidof(IDXGISurface), reinterpret_cast<void**>(&surface))))
+        IDXGIFactory2* factory2 = nullptr;
+        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory2))) || !factory2)
             return false;
 
-        const D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
-            D2D1_RENDER_TARGET_TYPE_DEFAULT,
-            D2D1::PixelFormat(DXGI_FORMAT_UNKNOWN, D2D1_ALPHA_MODE_PREMULTIPLIED));
-        const HRESULT hrRt = g.d2d->CreateDxgiSurfaceRenderTarget(surface, &props, &g.rt);
-        surface->Release();
-        if (FAILED(hrRt))
+        DXGI_SWAP_CHAIN_DESC1 sd{};
+        sd.Width        = kWidth;
+        sd.Height       = kHeight;
+        sd.Format       = DXGI_FORMAT_R8G8B8A8_UNORM;
+        sd.SampleDesc.Count = 1;
+        sd.BufferUsage  = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        sd.BufferCount  = kNumFrames;
+        sd.Scaling      = DXGI_SCALING_STRETCH;
+        sd.SwapEffect   = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        sd.AlphaMode    = DXGI_ALPHA_MODE_PREMULTIPLIED; // per-pixel прозрачность через DWM
+
+        const HRESULT hr = factory2->CreateSwapChainForHwnd(
+            g_queue, g_hwnd, &sd, nullptr, nullptr, &g_sc);
+        factory2->Release();
+        if (FAILED(hr))
             return false;
 
-        if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
-                __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(&g.dw))))
+        // RTV-куча: по дескриптору на бэкбуфер.
+        D3D12_DESCRIPTOR_HEAP_DESC rtvDesc{};
+        rtvDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        rtvDesc.NumDescriptors = kNumFrames;
+        if (FAILED(g_dev->CreateDescriptorHeap(&rtvDesc, IID_PPV_ARGS(&g_rtvHeap))))
+            return false;
+        g_rtvSize = g_dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        for (UINT i = 0; i < kNumFrames; ++i) {
+            ID3D12Resource* buf = nullptr;
+            g_sc->GetBuffer(i, IID_PPV_ARGS(&buf));
+            g_dev->CreateRenderTargetView(buf, nullptr, rtv);
+            buf->Release();
+            rtv.ptr += g_rtvSize;
+        }
+
+        // SRV-куча (shader visible) — для текстур ImGui (фонт и т.п.).
+        g_srvHeapCount = kNumFrames * kSrvPerFrame;
+        D3D12_DESCRIPTOR_HEAP_DESC srvDesc{};
+        srvDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        srvDesc.NumDescriptors = g_srvHeapCount;
+        srvDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        if (FAILED(g_dev->CreateDescriptorHeap(&srvDesc, IID_PPV_ARGS(&g_srvHeap))))
             return false;
 
-        g.dw->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 19.0f, L"ru-RU", &g.title);
-        g.dw->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
-            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 14.0f, L"ru-RU", &g.row);
-        g.dw->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
-            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 11.5f, L"ru-RU", &g.small);
+        for (UINT i = 0; i < kNumFrames; ++i) {
+            g_dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                          IID_PPV_ARGS(&g_frames[i].allocator));
+            g_dev->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&g_frames[i].fence));
+            g_frames[i].event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        }
+        if (FAILED(g_dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                            g_frames[0].allocator, nullptr,
+                                            IID_PPV_ARGS(&g_cmd))))
+            return false;
+        g_cmd->Close(); // в полёте не нужен, кадры ресетят его сами
 
-        g.rt->CreateSolidColorBrush(D2D1::ColorF(0.92f, 0.93f, 0.95f, 1.0f), &g.text);
-        g.rt->CreateSolidColorBrush(D2D1::ColorF(0.35f, 0.85f, 0.45f, 1.0f), &g.on);
-        g.rt->CreateSolidColorBrush(D2D1::ColorF(0.85f, 0.42f, 0.40f, 1.0f), &g.off);
-        g.rt->CreateSolidColorBrush(D2D1::ColorF(0.55f, 0.57f, 0.62f, 1.0f), &g.dim);
-        g.rt->CreateSolidColorBrush(D2D1::ColorF(0.055f, 0.06f, 0.08f, 0.90f), &g.panel);
         return true;
     }
 
-    void Text(const wchar_t* s, IDWriteTextFormat* fmt, ID2D1SolidColorBrush* br,
-              float x, float y) {
-        g.rt->DrawText(s, static_cast<UINT32>(wcslen(s)), fmt,
-                       D2D1::RectF(x, y, static_cast<float>(kWidth) - 12.0f,
-                                   static_cast<float>(kHeight)),
-                       br, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+    bool InitImGuiD3D12() {
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        ImGui::StyleColorsDark();
+        ImGuiStyle& st = ImGui::GetStyle();
+        st.WindowRounding  = 10.0f;
+        st.FrameRounding   = 4.0f;
+        st.WindowBorderSize = 0.0f;
+        SetupFonts();
+
+        if (!ImGui_ImplWin32_Init(g_hwnd))
+            return false;
+
+        ImGui_ImplDX12_InitInfo initInfo{};
+        initInfo.Device              = g_dev;
+        initInfo.CommandQueue        = g_queue;
+        initInfo.NumFramesInFlight   = kNumFrames;
+        initInfo.RTVFormat           = DXGI_FORMAT_R8G8B8A8_UNORM;
+        initInfo.SrvDescriptorHeap   = g_srvHeap;
+        initInfo.SrvDescriptorAllocFn = SrvAlloc;
+        initInfo.SrvDescriptorFreeFn  = SrvFree;
+        if (!ImGui_ImplDX12_Init(&initInfo))
+            return false;
+
+        // Фонт аллоцирует SRV из нашего кольца — курсор выставляем на окно кадра 0.
+        g_srvCursor = 0;
+        ImGui_ImplDX12_CreateDeviceObjects();
+        return true;
     }
 
-    enum class Mode { Waiting, Hud, Unloaded };
-
-    void RenderFrame(const nwshared::State* st, Mode mode) {
-        g.rt->BeginDraw();
-        g.rt->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
-        g.rt->FillRoundedRectangle(
-            D2D1::RoundedRect(D2D1::RectF(0.0f, 0.0f, static_cast<float>(kWidth),
-                                          static_cast<float>(kHeight)),
-                              10.0f, 10.0f),
-            g.panel);
-
-        float y = 12.0f;
-        Text(L"NEVERWIN", g.title, g.text, 14.0f, y);
-        y += 24.0f;
-        if (st && st->dllVersion > 0) {
-            wchar_t sub[128]{};
-            swprintf(sub, 128, L"v%d — professional software for losing professionally",
-                     static_cast<int>(st->dllVersion));
-            Text(sub, g.small, g.dim, 14.0f, y);
-        } else {
-            Text(L"professional software for losing professionally", g.small, g.dim, 14.0f, y);
-        }
-        y += 28.0f;
-
-        if (mode == Mode::Waiting) {
-            Text(L"ожидание neverwin.dll...", g.row, g.dim, 14.0f, y);
-            Text(L"инжектни DLL — HUD подхватит состояние сам", g.small, g.dim, 14.0f, y + 22.0f);
-        } else if (mode == Mode::Unloaded) {
-            Text(L"DLL выгружена (END)", g.row, g.off, 14.0f, y);
-            Text(L"оверлей закроется через пару секунд", g.small, g.dim, 14.0f, y + 22.0f);
-        } else {
-            const struct { const wchar_t* key; const wchar_t* name; uint8_t on; } rows[] = {
-                { L"[F1]", L"Реверс аимбот: наводка на тимейтов", st->antiAimbot },
-                { L"[F2]", L"Антиаимлесс: взгляд в пол",          st->antiAimless },
-                { L"[F3]", L"Visual recoil x4",                   st->visualRecoil },
-                { L"[F4]", L"Антибхоп",                           st->antiBhop },
-                { L"[F5]", L"Gamesense: дроп оружия",             st->gamesense },
-            };
-            for (const auto& r : rows) {
-                Text(r.key, g.row, g.dim, 14.0f, y);
-                Text(r.name, g.row, g.text, 62.0f, y);
-                Text(r.on ? L"ON" : L"OFF", g.row, r.on ? g.on : g.off,
-                     static_cast<float>(kWidth) - 56.0f, y);
-                y += 26.0f;
-            }
-            y += 12.0f;
-
-            wchar_t line[256]{};
-            swprintf(line, 256, L"client.dll   0x%llX",
-                     static_cast<unsigned long long>(st->clientBase));
-            Text(line, g.small, g.dim, 14.0f, y); y += 17.0f;
-            swprintf(line, 256, L"LocalPlayer  0x%llX   hp %d   team %d",
-                     static_cast<unsigned long long>(st->localPlayer),
-                     static_cast<int>(st->localHealth), static_cast<int>(st->localTeam));
-            Text(line, g.small, g.dim, 14.0f, y); y += 17.0f;
-            Text(st->offsetsFromIni ? L"оффсеты: из neverwin.ini"
-                                    : L"оффсеты: ВСТРОЕННЫЕ — обнови ini!",
-                 g.small, st->offsetsFromIni ? g.on : g.off, 14.0f, y);
-            y += 19.0f;
-            Text(L"INSERT - меню | F6 - скрыть HUD | END - выгрузка", g.small, g.dim, 14.0f, y);
-        }
-
-        g.rt->EndDraw();
+    void ShutdownImGuiD3D12() {
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        ImGui::DestroyContext();
     }
 
-    bool IsOwnerAlive(uint32_t pid) {
-        if (!pid)
-            return false;
-        HANDLE ph = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-        if (!ph)
-            return false;
-        DWORD code = 0;
-        GetExitCodeProcess(ph, &code);
-        CloseHandle(ph);
-        return code == STILL_ACTIVE;
+    // --- отрисовка ---
+    void PushPanel(float alpha) {
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.06f, 0.08f, alpha));
+    }
+    void PopPanel() { ImGui::PopStyleColor(); }
+
+    void DrawHud(const nwshared::State& st) {
+        ImGui::SetNextWindowPos(ImVec2(12.0f, 12.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(416.0f, 250.0f), ImGuiCond_Always);
+        PushPanel(0.88f);
+        const ImGuiWindowFlags hudFlags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoInputs;
+        ImGui::Begin("hud", nullptr, hudFlags);
+
+        ImGui::Text("NEVERWIN");
+        ImGui::SameLine();
+        ImGui::TextDisabled("v%d", static_cast<int>(st.dllVersion));
+        ImGui::TextDisabled("professional software for losing professionally");
+        ImGui::Separator();
+
+        const struct { const char* name; bool on; } rows[] = {
+            { "[F1] Реверс аимбот: наводка на тимейтов", st.antiAimbot != 0 },
+            { "[F2] Антиаимлесс: взгляд в пол",           st.antiAimless != 0 },
+            { "[F3] Visual recoil x4",                    st.visualRecoil != 0 },
+            { "[F4] Антибхоп",                            st.antiBhop != 0 },
+            { "[F5] Gamesense: дроп оружия",              st.gamesense != 0 },
+        };
+        for (const auto& r : rows) {
+            ImGui::Text("%s", r.name);
+            ImGui::SameLine();
+            ImGui::TextColored(r.on ? ImVec4(0.35f, 0.85f, 0.45f, 1.0f)
+                                    : ImVec4(0.85f, 0.42f, 0.40f, 1.0f),
+                               r.on ? "ON" : "OFF");
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("client.dll  0x%llX", static_cast<unsigned long long>(st.clientBase));
+        ImGui::TextDisabled("LocalPlayer 0x%llX  hp %d  team %d",
+                            static_cast<unsigned long long>(st.localPlayer),
+                            static_cast<int>(st.localHealth), static_cast<int>(st.localTeam));
+        ImGui::TextColored(st.offsetsFromIni ? ImVec4(0.45f, 1.0f, 0.55f, 1.0f)
+                                             : ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
+                           st.offsetsFromIni ? "оффсеты: из neverwin.ini"
+                                             : "оффсеты: ВСТРОЕННЫЕ — обнови ini!");
+        ImGui::TextDisabled("P - меню | F6 - скрыть HUD | END - выгрузка");
+        ImGui::End();
+        PopPanel();
+    }
+
+    void DrawMenu(nwshared::Viewer& viewer, const nwshared::State& st) {
+        ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize, ImGuiCond_Always);
+        PushPanel(0.95f);
+        const ImGuiWindowFlags menuFlags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings;
+        ImGui::Begin("menu", nullptr, menuFlags);
+
+        ImGui::Text("NEVERWIN  v%d", static_cast<int>(st.dllVersion));
+        ImGui::TextDisabled("professional software for losing professionally");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        const auto checkbox = [&](const char* label, uint32_t bit, bool& mirror) {
+            if (ImGui::Checkbox(label, &mirror))
+                g_m.pendingCmd = viewer.SendCommand(bit, mirror ? bit : 0);
+        };
+        checkbox("Реверс аимбот: наводка на тимейтов [F1]", nwshared::kFbAntiAimbot,   g_m.aa);
+        checkbox("Антиаимлесс: взгляд в пол [F2]",          nwshared::kFbAntiAimless,  g_m.al);
+        checkbox("Visual recoil x4 [F3]",                   nwshared::kFbVisualRecoil, g_m.vr);
+        checkbox("Антибхоп [F4]",                           nwshared::kFbAntiBhop,     g_m.ab);
+        checkbox("Gamesense: дроп оружия [F5]",             nwshared::kFbGamesense,    g_m.gs);
+
+        ImGui::Separator();
+        ImGui::TextDisabled("client.dll  0x%llX", static_cast<unsigned long long>(st.clientBase));
+        ImGui::TextDisabled("LocalPlayer 0x%llX  hp %d  team %d",
+                            static_cast<unsigned long long>(st.localPlayer),
+                            static_cast<int>(st.localHealth), static_cast<int>(st.localTeam));
+        ImGui::TextColored(st.offsetsFromIni ? ImVec4(0.45f, 1.0f, 0.55f, 1.0f)
+                                             : ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
+                           st.offsetsFromIni ? "оффсеты: из neverwin.ini"
+                                             : "оффсеты: ВСТРОЕННЫЕ — обнови ini!");
+        ImGui::Spacing();
+
+        if (ImGui::Button("Выгрузить DLL", ImVec2(-1, 0)))
+            viewer.SendCommand(nwshared::kFbUnload, nwshared::kFbUnload);
+        ImGui::TextDisabled("P - закрыть меню | F1-F5 тоже работают");
+        ImGui::End();
+        PopPanel();
+    }
+
+    void DrawStatus(const char* line, const char* sub, const ImVec4& color) {
+        ImGui::SetNextWindowPos(ImVec2(12.0f, 12.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(416.0f, 90.0f), ImGuiCond_Always);
+        PushPanel(0.9f);
+        ImGui::Begin("status", nullptr,
+                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs);
+        ImGui::TextColored(color, "%s", line);
+        ImGui::TextDisabled("%s", sub);
+        ImGui::End();
+        PopPanel();
+    }
+
+    // Зеркала фич: синхронизируем со снапшотом, когда нет невыполненной команды.
+    void SyncMirrors(const nwshared::State& st, nwshared::Viewer& viewer) {
+        if (g_m.pendingCmd && viewer.IsApplied(g_m.pendingCmd))
+            g_m.pendingCmd = 0;
+        if (g_m.pendingCmd)
+            return;
+        g_m.aa = st.antiAimbot != 0;
+        g_m.al = st.antiAimless != 0;
+        g_m.vr = st.visualRecoil != 0;
+        g_m.ab = st.antiBhop != 0;
+        g_m.gs = st.gamesense != 0;
+    }
+
+    LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+        if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam))
+            return 0;
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
+    enum class Mode { Waiting, Hud, Menu, Unloaded };
+
+    void RenderFrame(nwshared::Viewer& viewer, const nwshared::State& st, Mode mode) {
+        FrameCtx& fr = g_frames[g_frameIdx];
+        if (fr.fence->GetCompletedValue() < fr.fenceVal) {
+            ResetEvent(fr.event);
+            fr.fence->SetEventOnCompletion(fr.fenceVal, fr.event);
+            WaitForSingleObject(fr.event, INFINITE);
+        }
+
+        fr.allocator->Reset();
+        g_cmd->Reset(fr.allocator, nullptr);
+
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        rtv.ptr += static_cast<SIZE_T>(g_frameIdx) * g_rtvSize;
+        const float clear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        g_cmd->ClearRenderTargetView(rtv, clear, 0, nullptr);
+        g_cmd->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        g_cmd->SetDescriptorHeaps(1, &g_srvHeap);
+
+        // Окно SRV-дескрипторов текущего кадра: NewFrame/CreateDeviceObjects
+        // аллоцируют из него через SrvAlloc.
+        g_srvCursor = g_frameIdx * kSrvPerFrame;
+
+        ImGui_ImplDX12_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
+
+        ImGui::GetIO().MouseDrawCursor = (mode == Mode::Menu);
+
+        switch (mode) {
+        case Mode::Hud:   DrawHud(st); break;
+        case Mode::Menu:  DrawMenu(viewer, st); break;
+        case Mode::Unloaded:
+            DrawStatus("DLL выгружена (END)", "оверлей закроется через пару секунд",
+                       ImVec4(0.85f, 0.42f, 0.40f, 1.0f));
+            break;
+        case Mode::Waiting:
+        default:
+            DrawStatus("ожидание neverwin.dll...",
+                       "инжектни DLL — меню откроется на P",
+                       ImVec4(0.55f, 0.57f, 0.62f, 1.0f));
+            break;
+        }
+
+        ImGui::Render();
+        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g_cmd);
+
+        g_cmd->Close();
+        ID3D12CommandList* lists[] = { g_cmd };
+        g_queue->ExecuteCommandLists(1, lists);
+        g_sc->Present(1, 0);
+
+        fr.fenceVal = ++g_fenceCnt;
+        g_queue->Signal(fr.fence, fr.fenceVal);
+        g_frameIdx = (g_frameIdx + 1) % kNumFrames;
     }
 
 } // namespace
@@ -203,36 +435,38 @@ int wmain() {
     SetProcessDPIAware();
 
     WNDCLASSEXW wc{ sizeof(wc) };
-    wc.lpfnWndProc   = DefWindowProcW;
+    wc.lpfnWndProc   = WndProc;
     wc.hInstance     = GetModuleHandleW(nullptr);
     wc.lpszClassName = L"NeverwinOverlayWnd";
     RegisterClassExW(&wc);
 
-    const HWND hwnd = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+    g_hwnd = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
         wc.lpszClassName, L"neverwin overlay", WS_POPUP,
         kPosX, kPosY, kWidth, kHeight,
         nullptr, nullptr, wc.hInstance, nullptr);
-    if (!hwnd)
+    if (!g_hwnd)
         return 1;
 
-    SetLayeredWindowAttributes(hwnd, 0, kAlpha, LWA_ALPHA);
-
-    if (!InitGfx(hwnd)) {
-        MessageBoxW(nullptr, L"не смог поднять Direct2D", L"neverwin overlay", MB_ICONERROR);
+    if (!InitD3D12() || !InitImGuiD3D12()) {
+        MessageBoxW(nullptr, L"не смог поднять DirectX 12 / ImGui", L"neverwin overlay", MB_ICONERROR);
         return 1;
     }
 
+    ImGui::GetIO().DisplaySize = ImVec2(static_cast<float>(kWidth), static_cast<float>(kHeight));
+
     nwshared::Viewer viewer;
     nwshared::State  st{};
-    ULONGLONG lastAttach = 0, lastOwnerCheck = 0, unloadSeenAt = 0;
-    bool ownerOk = false;
+    ULONGLONG lastAttach = 0, unloadSeenAt = 0;
+    bool show = true;
 
-    ShowWindow(hwnd, SW_SHOWNA);
+    ShowWindow(g_hwnd, SW_SHOWNA);
 
     for (;;) {
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT)
+                return 0;
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -244,48 +478,57 @@ int wmain() {
             viewer.Attach();
         }
 
-        if (viewer.Snapshot(st)) {
-            if (now - lastOwnerCheck > 500) {
-                lastOwnerCheck = now;
-                ownerOk = IsOwnerAlive(st.ownerPid);
-            }
+        Mode mode = Mode::Waiting;
+        bool alive = viewer.Snapshot(st);
 
-            if (ownerOk && !st.unloadRequested) {
-                unloadSeenAt = 0;
-                if (!st.hudVisible) {
-                    if (IsWindowVisible(hwnd))
-                        ShowWindow(hwnd, SW_HIDE);
-                } else {
-                    if (!IsWindowVisible(hwnd))
-                        ShowWindow(hwnd, SW_SHOWNA);
-                    RenderFrame(&st, Mode::Hud);
-                    g.sc->Present(0, 0);
-                }
-            } else if (st.unloadRequested || !ownerOk) {
-                ShowWindow(hwnd, SW_SHOWNA);
-                RenderFrame(&st, Mode::Unloaded);
-                g.sc->Present(0, 0);
+        if (alive) {
+            if (st.unloadRequested) {
+                mode = Mode::Unloaded;
                 if (!unloadSeenAt)
                     unloadSeenAt = now;
                 if (now - unloadSeenAt > 3000)
-                    break; // DLL выгрузилась — оверлею больше нечего показывать
+                    break;
+            } else if (st.menuOpen) {
+                mode = Mode::Menu;
+                SyncMirrors(st, viewer);
             } else {
-                if (!IsWindowVisible(hwnd))
-                    ShowWindow(hwnd, SW_SHOWNA);
-                RenderFrame(&st, Mode::Waiting);
-                g.sc->Present(0, 0);
+                mode = Mode::Hud;
+                SyncMirrors(st, viewer);
             }
-        } else {
-            if (!IsWindowVisible(hwnd))
-                ShowWindow(hwnd, SW_SHOWNA);
-            RenderFrame(nullptr, Mode::Waiting);
-            g.sc->Present(0, 0);
         }
+
+        // Видимость и кликабельность следуют режиму.
+        if (mode == Mode::Hud && !st.hudVisible)
+            show = false;
+        else
+            show = true;
+        if (show && !IsWindowVisible(g_hwnd))
+            ShowWindow(g_hwnd, SW_SHOWNA);
+        if (!show && IsWindowVisible(g_hwnd))
+            ShowWindow(g_hwnd, SW_HIDE);
+
+        SetClickThrough(mode != Mode::Menu);
+
+        if (show)
+            RenderFrame(viewer, st, mode);
 
         Sleep(16);
     }
 
-    ReleaseGfx();
-    DestroyWindow(hwnd);
+    ShutdownImGuiD3D12();
+    for (UINT i = 0; i < kNumFrames; ++i) {
+        g_frames[i].fence->SetEventOnCompletion(g_frames[i].fenceVal, g_frames[i].event);
+        WaitForSingleObject(g_frames[i].event, 1000);
+        CloseHandle(g_frames[i].event);
+        g_frames[i].allocator->Release();
+        g_frames[i].fence->Release();
+    }
+    g_cmd->Release();
+    g_srvHeap->Release();
+    g_rtvHeap->Release();
+    g_queue->Release();
+    g_sc->Release();
+    g_dev->Release();
+    DestroyWindow(g_hwnd);
     return 0;
 }

@@ -115,32 +115,43 @@ m_bInReload=0x1814
 
 | Клавиша | Действие |
 |---|---|
-| INSERT | открыть/закрыть ImGui-меню |
+| P | открыть/закрыть меню оверлея |
 | F1 | реверс аимбот (наводка на ближайшего живого тиммейта) |
 | F2 | антиаимлесс (взгляд в пол при враге) |
 | F3 | visual recoil x4 |
 | F4 | антибхоп |
 | F5 | gamesense (дроп оружия) |
-| F6 | показать/скрыть внешний HUD-оверлей |
+| F6 | показать/скрыть HUD-оверлей |
 | END | выгрузка DLL |
 
-## Внешний HUD-оверлей (если ImGui-меню не видно)
+INSERT оставлен как запасной тоггл меню.
 
-ImGui-меню рендерится хуком Present в DX11-цепочке игры. Хук цепляется за обе
-vtable — `IDXGISwapChain` и `IDXGISwapChain1` (CS2 презентит через вторую).
-Но на `-vulkan` DXGI-хук не работает в принципе — для этого есть оверлей:
+## Меню — внешнее, на DirectX 12 (v4+)
 
-**`neverwin_overlay_vN.exe`** — отдельный процесс, не инжектится. Рисует
-своё D2D-окно поверх игры (topmost, layered, click-through — мышь проходит
-насквозь) и читает состояние DLL из shared memory (`Local\neverwin_state_v3`).
-Работает при любом рендерере. Порядок не важен: можно запустить оверлей до
-инжекта — он покажет «ожидание neverwin.dll» и подхватит состояние сам.
+Внутриигрового хука рендера больше нет. Он был причиной краша при инжекте:
+ImGui рисовал в flip-model свопчейн CS2 через IDXGISwapChain1, и на живом
+клиенте это роняло игру. Меню теперь полностью снаружи:
 
-- Оверлей показывает: фичи (F1–F5) ON/OFF, client.dll, LocalPlayer, оффсеты.
+**`neverwin_overlay_vN.exe`** — отдельный процесс, **не инжектится**.
+Собственное окно поверх игры (topmost, per-pixel прозрачность через DWM,
+click-through когда меню закрыто — мышь проходит насквозь), рендер —
+**DirectX 12** (ImGui + imgui_impl_dx12, flip-model свопчейн). Работает при
+любом рендерере CS2 — DX11 и Vulkan.
+
+Обмен с DLL — named shared memory (`Local\neverwin_state_v4`), канал
+двусторонний: DLL пишет снапшот (фичи, диагностика) каждый тик, оверлей
+шлёт команды (чекбоксы меню, кнопка выгрузки). Порядок запуска не важен:
+оверлей до инжекта показывает «ожидание neverwin.dll» и подхватывает
+состояние сам.
+
+- **P** — открыть меню: чекбоксы реально включают фичи, кнопка выгружает DLL.
+- Меню закрыто — маленький HUD со статусами фич и диагностикой.
 - F6 — скрыть/показать HUD. После END оверлей показывает «DLL выгружена»
   и закрывается сам через 3 секунды.
 - **Игра должна быть в оконном или borderless-режиме** — поверх exclusive
-  fullscreen внешнее окно не встанет (это ограничение любых внешних оверлеев).
+  fullscreen внешнее окно не встанет (ограничение любых внешних оверлеев).
+
+Если оверлей упадёт — он вне игры, CS2 не заденет.
 
 ## Сборка
 
@@ -175,7 +186,7 @@ cmake --build build
 1. Запусти CS2, дождись загрузки.
 2. `neverwin_injector.exe` — сам найдёт `cs2.exe` и `neverwin.dll` рядом с собой.
    (или `neverwin_injector.exe <PID> <путь\к\neverwin.dll>`)
-3. В игре: INSERT — меню, END — выгрузка.
+3. Запусти `neverwin_overlay_vN.exe` и инжектни DLL. В игре: P — меню, END — выгрузка.
 
 ## Если опять вылетит
 
@@ -188,20 +199,25 @@ cmake --build build
 ```
 neverwin-internal/
 ├── src/
-│   ├── main.cpp        — DllMain, главный поток, загрузка neverwin.ini, выгрузка
-│   ├── features.cpp    — все фичи (логика из internal.txt, безопасно)
-│   ├── gui.cpp         — DX11 Present-хук, WndProc-хук, ImGui-меню
-│   ├── offsets.hpp     — встроенные оффсеты (дефолты)
-│   ├── offsets.cpp     — чтение оффсетов из neverwin.ini
-│   ├── memory.hpp      — безопасные Read/Write
-│   ├── log.hpp         — лог в %TEMP%\neverwin.log
-│   ├── util.hpp        — UTF-16 → UTF-8
-│   └── pch.h           — общие инклуды
+│   ├── main.cpp         — DllMain, главный поток, загрузка neverwin.ini, выгрузка
+│   ├── features.cpp     — все фичи + shared memory (снапшот и команды оверлея)
+│   ├── gui.cpp          — только флаги меню/HUD/выгрузки (хуков больше нет)
+│   ├── shared_state.hpp — протокол DLL <-> оверлей (named shared memory)
+│   ├── offsets.hpp      — встроенные оффсеты (дефолты)
+│   ├── offsets.cpp      — чтение оффсетов из neverwin.ini
+│   ├── memory.hpp       — безопасные Read/Write
+│   ├── log.hpp          — лог в %TEMP%\neverwin.log
+│   ├── util.hpp         — UTF-16 → UTF-8
+│   └── pch.h            — общие инклуды
+├── overlay/
+│   └── overlay.cpp      — внешнее меню/HUD на DirectX 12 (ImGui + dx12)
 ├── injector/
-│   └── injector.cpp    — x64-инжектор с понятными ошибками
+│   └── injector.cpp     — x64-инжектор с понятными ошибками
 ├── tools/
-│   └── dump_to_ini.py  — генератор neverwin.ini из дампа cs2-dumper
-├── thirdparty/imgui/   — ImGui 1.93 (распакован из imgui-master.zip в корне репо)
+│   └── dump_to_ini.py   — генератор neverwin.ini из дампа cs2-dumper
+├── thirdparty/imgui/    — ImGui 1.93 (распакован из imgui-master.zip в корне репо);
+│                          imgui_demo.cpp — эталонное меню (все виджеты, вкладки,
+│                          хоткеи) — смотри, как устроены меню вообще
 ├── CMakeLists.txt
 └── build.bat
 ```

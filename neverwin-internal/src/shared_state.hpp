@@ -1,14 +1,16 @@
 #pragma once
 // ============================================================================
-// Общее состояние DLL для внешнего оверлея (shared memory).
+// Общее состояние DLL <-> внешний оверлей (shared memory).
 //
-// neverwin.dll пишет сюда снапшот фич и диагностики каждый тик,
-// neverwin_overlay.exe читает и рисует HUD. Оверлей внешний: он не лезет
-// в игру, поэтому работает при любом рендерере (DX11/Vulkan).
+// neverwin.dll пишет снапшот (фичи, диагностика) каждый тик; оверлей читает
+// и рисует меню/HUD. Канал двусторонний: оверлей шлёт команды (тогглы фич,
+// выгрузка), DLL их применяет.
 //
-// Протокол: Publisher (DLL) — создатель маппинга, пишет поля, фиксирует
-// снапшот инкрементом seq. Viewer (оверлей) открывает маппинг, читает seq
-// до и после копии — если совпал, снапшот без разрыва.
+// Протокол:
+//   DLL -> оверлей: поля снапшота + инкремент seq после записи.
+//   Оверлей -> DLL: setMask/setValues, затем инкремент cmdSeq; DLL применяет
+//   команду и пишет appliedSeq = cmdSeq (ack).
+// Инкременты — через Interlocked: они же барьеры видимости для соседних полей.
 // ============================================================================
 #include <cstdint>
 #include <cstring>
@@ -20,27 +22,34 @@
 
 namespace nwshared {
 
-    constexpr wchar_t  kMapName[] = L"Local\\neverwin_state_v3";
-    constexpr uint32_t kMapSize   = 256;
-    constexpr uint32_t kMagic     = 0x4E573033; // "NW03"
+    constexpr wchar_t  kMapName[] = L"Local\\neverwin_state_v4";
+    constexpr uint32_t kMapSize   = 512;
+    constexpr uint32_t kMagic     = 0x4E573034; // "NW04"
+
+    // Биты фич в командах.
+    enum FeatureBit : uint32_t {
+        kFbAntiAimbot   = 1u << 0, // F1 — реверс аимбот
+        kFbAntiAimless  = 1u << 1, // F2 — взгляд в пол
+        kFbVisualRecoil = 1u << 2, // F3 — отдача x4
+        kFbAntiBhop     = 1u << 3, // F4
+        kFbGamesense    = 1u << 4, // F5
+        kFbUnload       = 1u << 5, // команда: выгрузить DLL
+    };
 
     struct State {
-        uint32_t magic;          // kMagic, иначе маппинг чужой/мёртвый
-        uint32_t seq;            // инкрементится после каждой записи
-        uint32_t ownerPid;       // PID игры (владелец маппинга)
-        uint32_t dllVersion;     // версия сборки DLL (vN), 0 = неизвестно
-
-        // фичи (1 = ON)
-        uint8_t antiAimbot;      // F1 — реверс аимбот
-        uint8_t antiAimless;     // F2 — взгляд в пол
-        uint8_t visualRecoil;    // F3 — отдача x4
-        uint8_t antiBhop;        // F4
-        uint8_t gamesense;       // F5
-        uint8_t hudVisible;      // F6 — показать/скрыть внешний HUD
-        uint8_t menuOpen;        // INSERT — встроенное ImGui-меню
-        uint8_t unloadRequested; // END — DLL выгружается, оверлею на выход
-
-        // диагностика
+        // --- DLL -> оверлей ---
+        uint32_t magic;
+        uint32_t seq;             // инкремент после каждого снапшота
+        uint32_t ownerPid;
+        uint32_t dllVersion;
+        uint8_t  antiAimbot;
+        uint8_t  antiAimless;
+        uint8_t  visualRecoil;
+        uint8_t  antiBhop;
+        uint8_t  gamesense;
+        uint8_t  hudVisible;      // F6
+        uint8_t  menuOpen;        // P
+        uint8_t  unloadRequested; // END / кнопка в меню
         uint64_t clientBase;
         uint64_t entityList;
         uint64_t localPlayer;
@@ -48,11 +57,17 @@ namespace nwshared {
         int32_t  localTeam;
         uint8_t  viewAnglesWritable;
         uint8_t  offsetsFromIni;
-        uint8_t  pad1[6];
+        uint8_t  pad[6];
+
+        // --- оверлей -> DLL (команды) ---
+        uint32_t cmdSeq;
+        uint32_t appliedSeq;
+        uint32_t setMask;
+        uint32_t setValues;
     };
     static_assert(sizeof(State) <= kMapSize, "State не влезает в kMapSize");
 
-    // Владелец (DLL): создаёт маппинг, пишет, инкрементит seq.
+    // Владелец (DLL): создаёт маппинг, пишет снапшоты, применяет команды.
     class Publisher {
         HANDLE m_map = nullptr;
         State* m_st  = nullptr;
@@ -62,7 +77,7 @@ namespace nwshared {
             m_map = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
                                        0, kMapSize, kMapName);
             if (!m_map) {
-                // Кто-то уже создал (повторный инжект) — открываем существующий.
+                // Повторный инжект: маппинг уже создан — открываем существующий.
                 m_map = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, kMapName);
             }
             if (m_map)
@@ -71,7 +86,7 @@ namespace nwshared {
                 RtlZeroMemory(m_st, sizeof(State));
                 m_st->magic      = kMagic;
                 m_st->ownerPid   = GetCurrentProcessId();
-                m_st->hudVisible = 1; // HUD виден сразу после старта оверлея
+                m_st->hudVisible = 1;
             }
         }
         ~Publisher() {
@@ -93,10 +108,10 @@ namespace nwshared {
         }
     };
 
-    // Читатель (оверлей): открывает чужой маппинг, снимает атомарный снапшот.
+    // Читатель (оверлей): открывает чужой маппинг, шлёт команды.
     class Viewer {
         HANDLE       m_map = nullptr;
-        const State* m_st  = nullptr;
+        State*       m_st  = nullptr; // пишем команды — нужен доступ на запись
 
     public:
         Viewer() = default;
@@ -106,10 +121,10 @@ namespace nwshared {
 
         bool Attach() {
             Detach();
-            m_map = OpenFileMappingW(FILE_MAP_READ, FALSE, kMapName);
+            m_map = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, kMapName);
             if (!m_map)
                 return false;
-            m_st = static_cast<const State*>(MapViewOfFile(m_map, FILE_MAP_READ, 0, 0, kMapSize));
+            m_st = static_cast<State*>(MapViewOfFile(m_map, FILE_MAP_ALL_ACCESS, 0, 0, kMapSize));
             return m_st != nullptr;
         }
         void Detach() {
@@ -135,6 +150,19 @@ namespace nwshared {
                     return true;
             }
             return false;
+        }
+        // Команда DLL: маска битов + их значения. cmdSeq инкрементим последним —
+        // DLL по нему видит, что setMask/setValues уже зафиксированы.
+        uint32_t SendCommand(uint32_t mask, uint32_t values) {
+            if (!Alive())
+                return 0;
+            m_st->setMask   = mask;
+            m_st->setValues = values;
+            return static_cast<uint32_t>(
+                InterlockedIncrement(reinterpret_cast<volatile LONG*>(&m_st->cmdSeq)));
+        }
+        bool IsApplied(uint32_t cmdSeq) const {
+            return m_st && m_st->appliedSeq == cmdSeq;
         }
     };
 

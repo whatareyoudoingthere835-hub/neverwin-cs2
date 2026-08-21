@@ -18,23 +18,17 @@ set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/imgui)
 
 # ---------------------------------------------------------------------------
 # DLL
+# Меню больше не рисуется внутри игры (хук Present убран — он ронял CS2 при
+# инжекте). DLL: фичи + shared memory + хоткеи. Меню/HUD — внешний оверлей.
 # ---------------------------------------------------------------------------
 add_library(neverwin SHARED
     src/main.cpp
     src/features.cpp
     src/gui.cpp
     src/offsets.cpp
-    ${IMGUI_DIR}/imgui.cpp
-    ${IMGUI_DIR}/imgui_draw.cpp
-    ${IMGUI_DIR}/imgui_tables.cpp
-    ${IMGUI_DIR}/imgui_widgets.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp
 )
 target_include_directories(neverwin PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
 )
 target_compile_definitions(neverwin PRIVATE
     WIN32_LEAN_AND_MEAN
@@ -44,10 +38,7 @@ target_compile_definitions(neverwin PRIVATE
     _CRT_SECURE_NO_WARNINGS
     NW_VERSION=${NW_VERSION}
 )
-# gdi32/dwmapi/d3dcompiler нужны бэкендам ImGui. В MSVC они подхватились бы
-# через #pragma comment(lib, ...), но MinGW эти прагмы игнорирует — поэтому
-# явно указываем для обоих компиляторов.
-target_link_libraries(neverwin PRIVATE d3d11 dxgi d3dcompiler dwmapi imm32 user32 gdi32)
+target_link_libraries(neverwin PRIVATE user32)
 
 # ---------------------------------------------------------------------------
 # Инжектор
@@ -62,18 +53,32 @@ target_compile_definitions(neverwin_injector PRIVATE
 )
 
 # ---------------------------------------------------------------------------
-# Внешний HUD-оверлей (не инжектится: читает shared memory, рисует D2D-окно)
+# Внешний оверлей: меню + HUD на DirectX 12 (ImGui + imgui_impl_dx12).
+# Не инжектится: читает shared memory, команды шлёт обратно в DLL.
 # ---------------------------------------------------------------------------
-add_executable(neverwin_overlay overlay/overlay.cpp)
-target_include_directories(neverwin_overlay PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(neverwin_overlay
+    overlay/overlay.cpp
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_dx12.cpp
+)
+target_include_directories(neverwin_overlay PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+)
 target_compile_definitions(neverwin_overlay PRIVATE
     UNICODE
     _UNICODE
     _CRT_SECURE_NO_WARNINGS
     WIN32_LEAN_AND_MEAN
     NOMINMAX
+    NW_VERSION=${NW_VERSION}
 )
-target_link_libraries(neverwin_overlay PRIVATE d3d11 dxgi d2d1 dwrite user32)
+target_link_libraries(neverwin_overlay PRIVATE d3d12 dxgi d3dcompiler dwmapi imm32 user32 gdi32)
 
 # ---------------------------------------------------------------------------
 # Флаги по компиляторам
