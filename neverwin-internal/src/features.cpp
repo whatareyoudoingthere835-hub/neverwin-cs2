@@ -207,28 +207,50 @@ namespace {
 
     // Цель реверс аима: ближайший тиммейт. Живой предпочтительнее трупа,
     // стены и дальность не проверяются — наводимся всегда, если есть на кого.
+    //
+    // Скан по 512 хэндлам: игроки обычно в начале списка, но широкий скан
+    // ничего не стоит. Команда читается через ent::GetTeam (uint8!) —
+    // int-чтение ломало фильтр тиммейтов на части павнов.
+    //
+    // Диагностика: сколько павнов/врагов/тимейтов/нод/origin увидели —
+    // по этим числам видно, на каком шаге цепочка рвётся, если рвётся.
+    struct TeamScanStats {
+        int pawns = 0, enemies = 0, teammates = 0, withNode = 0, withOrigin = 0;
+    };
+
     bool FindTeammateTarget(uintptr_t localPlayer, uintptr_t entityList,
-                            int localTeam, ent::Vector3& outOrigin,
-                            int& aliveCount, int& totalCount) {
+                            uint8_t localTeam, ent::Vector3& outOrigin,
+                            int& aliveCount, int& totalCount,
+                            TeamScanStats& stats) {
         uintptr_t bestAlive = 0, bestAny = 0;
         ent::Vector3 aliveOrigin{}, anyOrigin{};
         float aliveDist2 = FLT_MAX, anyDist2 = FLT_MAX;
 
         const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
 
-        for (uint32_t i = 1; i < 64; ++i) {
+        for (uint32_t i = 1; i < 512; ++i) {
             const uintptr_t pawn = ent::GetEntityByHandle(entityList, i);
             if (!pawn || pawn == localPlayer)
                 continue;
-            if (mem::Read<int>(pawn + off.m_iTeamNum) != localTeam)
-                continue;
 
+            ++stats.pawns;
+            const uint8_t team = ent::GetTeam(pawn);
+            if (team != localTeam) {
+                if (team != 0 && mem::Read<int>(pawn + off.m_iHealth) > 0)
+                    ++stats.enemies;
+                continue;
+            }
+
+            ++stats.teammates;
             const uintptr_t node = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
             if (!node)
                 continue;
+            ++stats.withNode;
+
             const ent::Vector3 origin = mem::Read<ent::Vector3>(node + off.m_vecAbsOrigin);
             if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
                 continue;
+            ++stats.withOrigin;
 
             ++totalCount;
             const float dx = origin.x - eye.x;
@@ -332,7 +354,7 @@ void RunFeatureLoop() {
         if (!entityList)
             continue;
 
-        const int localTeam = mem::Read<int>(localPlayer + off.m_iTeamNum);
+        const uint8_t localTeam = ent::GetTeam(localPlayer);
         g_state.localTeam.store(localTeam);
 
         // Снапшот состояния для внешнего оверлея + приём его команд.
@@ -456,8 +478,9 @@ void RunFeatureLoop() {
         if (raimMode != 0) {
             ent::Vector3 targetOrigin{};
             int aliveCount = 0, totalCount = 0;
+            TeamScanStats stats;
             if (FindTeammateTarget(localPlayer, entityList, localTeam,
-                                   targetOrigin, aliveCount, totalCount)) {
+                                   targetOrigin, aliveCount, totalCount, stats)) {
                 const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
                 if (eye.x != 0.0f || eye.y != 0.0f || eye.z != 0.0f) {
                     // +64 юнита вверх от origin — корпус/голова.
@@ -510,7 +533,9 @@ void RunFeatureLoop() {
                 const uint32_t now = GetTickCount();
                 if (now - lastNone > 5000) {
                     lastNone = now;
-                    NW_LOG(L"raimv%d: тиммейтов в списке нет — наводиться не на кого.", raimMode);
+                    NW_LOG(L"raimv%d: цель не найдена. скан 512: павнов %d, врагов %d, тиммейтов %d (нод %d, origin %d), localTeam=%d",
+                           raimMode, stats.pawns, stats.enemies, stats.teammates,
+                           stats.withNode, stats.withOrigin, static_cast<int>(localTeam));
                 }
             }
         }
@@ -519,13 +544,13 @@ void RunFeatureLoop() {
         // Тот же метод, что работал до переноса: прямая запись viewAngles.
         if (g_features.antiAimless.load()) {
             bool enemySpotted = false;
-            for (uint32_t i = 1; i < 64; ++i) {
+            for (uint32_t i = 1; i < 512; ++i) {
                 const uintptr_t pawn = ent::GetEntityByHandle(entityList, i);
                 if (!pawn || pawn == localPlayer)
                     continue;
 
                 const int enemyHealth = mem::Read<int>(pawn + off.m_iHealth);
-                const int enemyTeam   = mem::Read<int>(pawn + off.m_iTeamNum);
+                const uint8_t enemyTeam = ent::GetTeam(pawn);
                 if (enemyHealth > 0 && enemyTeam != localTeam) {
                     enemySpotted = true;
                     break;

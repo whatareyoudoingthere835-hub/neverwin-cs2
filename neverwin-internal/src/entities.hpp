@@ -43,6 +43,14 @@ namespace ent {
         return origin + viewOffset;
     }
 
+    // Команда павна. m_iTeamNum — uint8! Читать его как int нельзя: у части
+    // павнов следующий байт ненулевой, и int-чтение даёт мусор (например
+    // 0x41xx). На мусорном localTeam фильтр «свой» не срабатывает ни на ком —
+    // именно так raim не видел тиммейтов при живом F2.
+    inline uint8_t GetTeam(uintptr_t pawn) {
+        return mem::Read<uint8_t>(pawn + offsets::g.m_iTeamNum);
+    }
+
     // Углы из точки A в точку B. Конвенция Source: pitch вверх отрицательный,
     // yaw из atan2 уже лежит в [-180, 180].
     inline Vector2 CalcAngles(const Vector3& from, const Vector3& to) {

@@ -95,7 +95,7 @@ def neverwin_loop():
             if local_health <= 0:
                 continue
 
-            local_team = pm.read_int(local_player + m_iTeamNum)
+            local_team = pm.read_uint(local_player + m_iTeamNum) & 0xFF  # uint8!
             entity_list = pm.read_longlong(client + dwEntityList)
 
             # --- 1. АНТИБХОП ---
@@ -179,7 +179,7 @@ def neverwin_loop():
                         pawn = pm.read_longlong(list_entry + 120 * (i & 0x1FF))
                         if not pawn or pawn == local_player:
                             continue
-                        if pm.read_int(pawn + m_iTeamNum) != local_team:
+                        if (pm.read_uint(pawn + m_iTeamNum) & 0xFF) != local_team:  # uint8
                             continue
 
                         node = pm.read_longlong(pawn + m_pGameSceneNode)
@@ -232,7 +232,7 @@ def neverwin_loop():
                         continue
 
                     health = pm.read_int(pawn + m_iHealth)
-                    team = pm.read_int(pawn + m_iTeamNum)
+                    team = pm.read_uint(pawn + m_iTeamNum) & 0xFF  # uint8
 
                     if health > 0 and team != local_team:
                         enemy_spotted = True
