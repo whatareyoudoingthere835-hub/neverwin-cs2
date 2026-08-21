@@ -133,9 +133,20 @@ namespace ent {
         return out;
     }
 
-    // Повторная проверка непосредственно перед использованием цели/выстрелом.
-    // Она также гарантирует, что controller всё ещё указывает на тот же pawn:
-    // после смерти/респавна старый указатель больше не пройдёт проверку.
+    // Локальный pawn уже получен из dwLocalPlayerPawn и не должен зависеть от
+    // controller-схемы. Иначе один устаревший m_hPlayerPawn/m_bPawnIsAlive
+    // выключает вообще весь feature loop, включая независимые функции камеры.
+    inline bool IsPawnAlive(uintptr_t pawn) {
+        if (!pawn)
+            return false;
+        const int health = mem::Read<int>(pawn + offsets::g.m_iHealth);
+        const uint8_t lifeState = mem::Read<uint8_t>(pawn + offsets::g.m_lifeState);
+        return health > 0 && health <= 1000 && lifeState == 0;
+    }
+
+    // Повторная строгая проверка именно УДАЛЁННОЙ цели перед использованием/
+    // выстрелом. Она гарантирует, что controller всё ещё указывает на тот же
+    // pawn: после смерти/респавна старый указатель проверку не пройдёт.
     inline bool IsPlayerStillAlive(uintptr_t entityList,
                                    uintptr_t controller,
                                    uintptr_t expectedPawn) {
@@ -150,9 +161,7 @@ namespace ent {
         if (!IsValidPlayerHandle(handle) || GetEntityByHandle(entityList, handle) != expectedPawn)
             return false;
 
-        const int health = mem::Read<int>(expectedPawn + off.m_iHealth);
-        const uint8_t lifeState = mem::Read<uint8_t>(expectedPawn + off.m_lifeState);
-        return health > 0 && health <= 1000 && lifeState == 0;
+        return IsPawnAlive(expectedPawn);
     }
 
     inline bool IsPlayerStillTargetable(uintptr_t entityList,

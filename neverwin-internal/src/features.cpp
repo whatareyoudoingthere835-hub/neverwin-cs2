@@ -425,16 +425,31 @@ void RunFeatureLoop() {
         const uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
         g_state.localPlayer.store(localPlayer);
         g_state.entityList.store(entityList);
-        if (!localPlayer || !localController || !entityList)
+        if (!localPlayer || !entityList)
             continue;
 
         const int health = mem::Read<int>(localPlayer + off.m_iHealth);
         g_state.localHealth.store(health);
 
-        // Жизнь локального проверяется тем же согласованным способом, что и
-        // жизнь целей: controller alive + актуальный handle + health/lifeState.
-        if (!ent::IsPlayerStillAlive(entityList, localController, localPlayer))
+        // dwLocalPlayerPawn уже даёт нужный локальный pawn. Не привязываем
+        // весь цикл камеры к controller-оффсетам: если после патча Valve
+        // m_hPlayerPawn/m_bPawnIsAlive устарели, F1/F2/recoil обязаны жить.
+        if (!ent::IsPawnAlive(localPlayer))
             continue;
+
+        // Controller-цепочка нужна целям и tick-based автоогню, но её сбой
+        // теперь только логируется, а не выключает вообще все фичи.
+        if (!localController ||
+            !ent::IsPlayerStillAlive(entityList, localController, localPlayer)) {
+            static uint32_t lastLocalControllerWarning = 0;
+            const uint32_t now = GetTickCount();
+            if (now - lastLocalControllerWarning > 5000) {
+                lastLocalControllerWarning = now;
+                NW_LOG(L"WARNING: local controller chain не совпала (controller 0x%llX, pawn 0x%llX). Камерные фичи продолжают работать по dwLocalPlayerPawn; обнови m_hPlayerPawn/m_bPawnIsAlive.",
+                       static_cast<unsigned long long>(localController),
+                       static_cast<unsigned long long>(localPlayer));
+            }
+        }
 
         const uint8_t localTeam = ent::GetTeam(localPlayer);
         g_state.localTeam.store(localTeam);

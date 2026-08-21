@@ -122,7 +122,9 @@ namespace nonagon_cs2 {
             return std::sqrtf(vel.x*vel.x + vel.y*vel.y + vel.z*vel.z);
         }
         bool IsAlive() const override {
-            return ent::IsPlayerStillAlive(entityList, controller, pawn);
+            // Локальный pawn приходит напрямую из dwLocalPlayerPawn. Не даём
+            // controller-схеме отключить rage/camera целиком после патча.
+            return ent::IsPawnAlive(pawn);
         }
         bool IsTeammate() const override { return false; }
         bool IsVisible(HitboxID h) const override { (void)h; return true; }
@@ -192,9 +194,16 @@ namespace nonagon_cs2 {
             // Старый CanFire проверял только патроны и спамил кликами каждый
             // миллисекундный проход. Теперь выстрел разрешается не раньше
             // серверного weapon cooldown.
-            const int tickBase = mem::Read<int>(controller + off.m_nTickBase);
             const int nextPrimary = mem::Read<int>(weapon + off.m_nNextPrimaryAttackTick);
-            return tickBase >= 0 && nextPrimary <= tickBase;
+            if (controller) {
+                const int tickBase = mem::Read<int>(controller + off.m_nTickBase);
+                // Нулевой tickBase означает, что controller/schema пока не
+                // читается. В таком случае не блокируем триггер навсегда —
+                // реальный cooldown всё равно проверит сама игра.
+                if (tickBase > 0 && nextPrimary > tickBase)
+                    return false;
+            }
+            return true;
         }
 
         bool IsScoped() const override {

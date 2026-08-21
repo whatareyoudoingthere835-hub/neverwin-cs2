@@ -43,8 +43,14 @@ F6 Nonagon Ragebot · END — выгрузка.
 
 В меню Ragebot есть **«Автоогонь / триггер»**. Триггер ждёт pawn под прицелом
 или остаточную ошибку не больше 1.5°, проверяет патроны, reload, запрет атаки и
-weapon cooldown. Готовая сборка: `neverwin_v24.dll` +
-`neverwin_injector_v24.exe`.
+weapon cooldown.
+
+**v25 фикс камеры:** локальный `dwLocalPlayerPawn` больше не обязан проходить
+controller-проверку целей. Устаревшие `m_hPlayerPawn`/`m_bPawnIsAlive` теперь
+не выключают весь feature loop, поэтому F1/F2/visual recoil продолжают работать;
+несовпадение controller-цепочки только пишется в лог.
+
+Готовая сборка: `neverwin_v25.dll` + `neverwin_injector_v25.exe`.
 
 ## Реверс аим (v10+)
 
