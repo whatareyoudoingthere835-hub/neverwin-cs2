@@ -19,6 +19,9 @@ namespace offsets {
         std::uintptr_t dwLocalPlayerPawn = 0x23AA118;
         std::uintptr_t dwViewAngles      = 0x23C01A8;
         std::uintptr_t dwLocalPlayerController = 0x2384DB0; // контроллер (цепочка user cmd, raimv2)
+        // CGameEntitySystem::m_hHighestEntityIndex. Нужен только запасному
+        // scanner-у F1, когда controller->m_hPlayerPawn временно не резолвится.
+        std::uintptr_t highestEntityIndexOffset = 0x2090;
 
         // --- C_BaseEntity (и все наследники) ---
         std::uintptr_t m_iHealth         = 0x34C;
@@ -44,6 +47,9 @@ namespace offsets {
         // controller -> m_hPlayerPawn -> pawn + согласованный alive-флаг.
         std::uintptr_t m_hPlayerPawn      = 0x914;
         std::uintptr_t m_bPawnIsAlive     = 0x91C;
+        // Обратная связь pawn -> controller; используется для верифицированного
+        // fallback-скана reverse aim.
+        std::uintptr_t m_hController      = 0x13D0;
         std::uintptr_t m_nTickBase        = 0x6B8;
         std::uintptr_t m_CommandContext   = 0x608;  // CCommandContext* (канал raimv2)
 

@@ -42,6 +42,7 @@ namespace offsets {
         o.dwLocalPlayerPawn = ReadHex(L"dwLocalPlayerPawn", o.dwLocalPlayerPawn);
         o.dwViewAngles      = ReadHex(L"dwViewAngles",      o.dwViewAngles);
         o.dwLocalPlayerController = ReadHex(L"dwLocalPlayerController", o.dwLocalPlayerController);
+        o.highestEntityIndexOffset = ReadHex(L"highestEntityIndexOffset", o.highestEntityIndexOffset);
         o.m_iHealth         = ReadHex(L"m_iHealth",         o.m_iHealth);
         o.m_lifeState       = ReadHex(L"m_lifeState",       o.m_lifeState);
         o.m_iTeamNum        = ReadHex(L"m_iTeamNum",        o.m_iTeamNum);
@@ -57,6 +58,7 @@ namespace offsets {
         o.m_iIDEntIndex     = ReadHex(L"m_iIDEntIndex",     o.m_iIDEntIndex);
         o.m_hPlayerPawn     = ReadHex(L"m_hPlayerPawn",     o.m_hPlayerPawn);
         o.m_bPawnIsAlive    = ReadHex(L"m_bPawnIsAlive",    o.m_bPawnIsAlive);
+        o.m_hController     = ReadHex(L"m_hController",     o.m_hController);
         o.m_nTickBase       = ReadHex(L"m_nTickBase",       o.m_nTickBase);
         o.m_CommandContext  = ReadHex(L"m_CommandContext",  o.m_CommandContext);
         o.m_vecCsViewPunchAngle = ReadHex(L"m_vecCsViewPunchAngle", o.m_vecCsViewPunchAngle);

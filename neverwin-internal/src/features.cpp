@@ -236,6 +236,9 @@ namespace {
         int immune = 0;
         int badPosition = 0;
         int tooClose = 0;
+        int fallbackScanned = 0;
+        int fallbackBackLinked = 0;
+        int fallbackTeammates = 0;
         // Индексы 0..3 = team, 4 = прочие значения.
         int teamPawns[5] = {0, 0, 0, 0, 0};
         int teamAlive[5] = {0, 0, 0, 0, 0};
@@ -335,6 +338,95 @@ namespace {
                 bestOrigin = player.origin;
                 bestHealth = player.health;
                 found = true;
+            }
+        }
+
+        // На некоторых сборках controller.m_hPlayerPawn содержит handle, но
+        // прямое разрешение handle через entity list кратко/полностью не даёт
+        // pawn (это видно как pawn=0 + unresolved>0). Не сканируем сущности
+        // вслепую: принимаем только объект, у которого обратный m_hController
+        // указывает на один из реальных controller-слотов 1..64.
+        // Скан ограничен highestEntityIndex и кэширован на 250 мс, чтобы не
+        // превращать feature loop в обход десятков тысяч объектов каждый тик.
+        if (!found && stats.pawns == 0) {
+            struct FallbackCache {
+                uintptr_t list = 0;
+                uintptr_t local = 0;
+                DWORD at = 0;
+                bool found = false;
+                ent::Vector3 origin{};
+                int health = 0;
+            };
+            static FallbackCache cache{};
+
+            const DWORD now = GetTickCount();
+            if (cache.list == entityList && cache.local == localPlayer &&
+                now - cache.at < 250) {
+                if (cache.found) {
+                    outOrigin = cache.origin;
+                    outHealth = cache.health;
+                    ++aliveCount;
+                    return true;
+                }
+            } else {
+                cache = {};
+                cache.list = entityList;
+                cache.local = localPlayer;
+                cache.at = now;
+
+                int highest = mem::Read<int>(entityList + off.highestEntityIndexOffset);
+                if (highest < ent::kFirstPlayerSlot || highest > 0x7FFE)
+                    highest = 2048; // безопасный fallback для битого highest index
+
+                for (int index = ent::kFirstPlayerSlot; index <= highest; ++index) {
+                    const uintptr_t pawn = ent::GetEntityByIndex(entityList, static_cast<uint32_t>(index));
+                    if (!pawn || pawn == localPlayer)
+                        continue;
+                    ++stats.fallbackScanned;
+
+                    const uint32_t controllerHandle =
+                        mem::Read<uint32_t>(pawn + off.m_hController);
+                    const uint32_t controllerIndex = controllerHandle & ent::kHandleIndexMask;
+                    if (controllerIndex < ent::kFirstPlayerSlot ||
+                        controllerIndex > ent::kMaxPlayerSlots ||
+                        !ent::GetEntityByIndex(entityList, controllerIndex))
+                        continue;
+                    ++stats.fallbackBackLinked;
+
+                    const int health = mem::Read<int>(pawn + off.m_iHealth);
+                    const uint8_t lifeState = mem::Read<uint8_t>(pawn + off.m_lifeState);
+                    if (health <= 0 || health > 1000 || lifeState != 0)
+                        continue;
+                    if (mem::Read<uint8_t>(pawn + off.m_iTeamNum) != localTeam)
+                        continue;
+
+                    const uintptr_t node = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
+                    const ent::Vector3 origin = node
+                        ? mem::Read<ent::Vector3>(node + off.m_vecAbsOrigin) : ent::Vector3{};
+                    if (!ent::IsUsablePlayerOrigin(origin))
+                        continue;
+                    ++stats.fallbackTeammates;
+
+                    const float dx = origin.x - eye.x;
+                    const float dy = origin.y - eye.y;
+                    const float dz = origin.z - eye.z;
+                    const float d2 = dx * dx + dy * dy + dz * dz;
+                    if (!cache.found || d2 < bestDist2) {
+                        bestDist2 = d2;
+                        cache.found = true;
+                        cache.origin = origin;
+                        cache.health = health;
+                    }
+                }
+
+                if (cache.found) {
+                    outOrigin = cache.origin;
+                    outHealth = cache.health;
+                    ++aliveCount;
+                    NW_LOG(L"raim: controller->pawn не резолвится; использован обратный pawn->m_hController scanner (проверено %d, связей %d, тиммейтов %d).",
+                           stats.fallbackScanned, stats.fallbackBackLinked, stats.fallbackTeammates);
+                    return true;
+                }
             }
         }
 
@@ -617,11 +709,12 @@ void RunFeatureLoop() {
                 if (now - lastNone > 5000) {
                     lastNone = now;
                     const ent::Vector3 eyeDbg = ent::GetEyePosition(localPlayer);
-                    NW_LOG(L"raimv%d: подходящей цели нет (это НЕ обязательно значит, что все мертвы). scan: slots %d empty %d ctrls %d pawn %d unresolved %d badHandle %d local %d; pawnAlive %d ctrlFlagDead %d; enemies %d teammates %d (team total %d targetable %d); reject hp %d life %d dormant %d badPos %d close %d immune %d; teams t0=%d/%d t1=%d/%d t2=%d/%d t3=%d/%d other=%d/%d (pawn/pawnAlive); local hp=%d life=%d team=%d eye=%.0f %.0f %.0f",
+                    NW_LOG(L"raimv%d: подходящей цели нет (это НЕ обязательно значит, что все мертвы). primary: slots %d empty %d ctrls %d pawn %d unresolved %d badHandle %d local %d; pawnAlive %d ctrlFlagDead %d; enemies %d teammates %d (team total %d targetable %d). fallback pawn->controller: scanned %d linked %d teammates %d. reject hp %d life %d dormant %d badPos %d close %d immune %d; teams t0=%d/%d t1=%d/%d t2=%d/%d t3=%d/%d other=%d/%d (pawn/pawnAlive); local hp=%d life=%d team=%d eye=%.0f %.0f %.0f",
                            raimMode, stats.slotsScanned, stats.emptySlots, stats.controllers,
                            stats.pawns, stats.unresolvedPawn, stats.invalidHandle, stats.localPawn,
                            stats.alive, stats.pawnAliveButControllerFlagDead,
                            stats.enemies, stats.teammates, totalCount, aliveCount,
+                           stats.fallbackScanned, stats.fallbackBackLinked, stats.fallbackTeammates,
                            stats.healthDead, stats.lifeDead, stats.dormant, stats.badPosition,
                            stats.tooClose, stats.immune,
                            stats.teamPawns[0], stats.teamAlive[0],
