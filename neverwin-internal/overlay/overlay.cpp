@@ -68,7 +68,8 @@ namespace {
     // Локальные зеркала фич: чтобы чекбоксы не дёргались, пока команда
     // летит до DLL и назад.
     struct MenuMirror {
-        bool     aa = false, al = false, vr = false, ab = false, gs = false;
+        int      raim = 0; // 0=off, 1=raimv1, 2=raimv2
+        bool     al = false, vr = false, ab = false, gs = false;
         uint32_t pendingCmd = 0;
         bool     dirty = false;
     } g_m;
@@ -267,19 +268,21 @@ namespace {
         ImGui::TextDisabled("professional software for losing professionally");
         ImGui::Separator();
 
-        const struct { const char* name; bool on; } rows[] = {
-            { "[F1] Реверс аимбот: наводка на тимейтов", st.antiAimbot != 0 },
-            { "[F2] Антиаимлесс: взгляд в пол",           st.antiAimless != 0 },
-            { "[F3] Visual recoil x4",                    st.visualRecoil != 0 },
-            { "[F4] Антибхоп",                            st.antiBhop != 0 },
-            { "[F5] Gamesense: дроп оружия",              st.gamesense != 0 },
+        const char* raimName =
+            st.reverseAim == 2 ? "raimv2" : st.reverseAim == 1 ? "raimv1" : "OFF";
+        const struct { const char* name; const char* val; bool on; } rows[] = {
+            { "[F1] Реверс аим: наводка на тимейтов", raimName, st.reverseAim != 0 },
+            { "[F2] Антиаимлесс: взгляд в пол",       "ON",    st.antiAimless != 0 },
+            { "[F3] Visual recoil x4",                "ON",    st.visualRecoil != 0 },
+            { "[F4] Антибхоп",                        "ON",    st.antiBhop != 0 },
+            { "[F5] Gamesense: дроп оружия",          "ON",    st.gamesense != 0 },
         };
         for (const auto& r : rows) {
             ImGui::Text("%s", r.name);
             ImGui::SameLine();
             ImGui::TextColored(r.on ? ImVec4(0.35f, 0.85f, 0.45f, 1.0f)
                                     : ImVec4(0.85f, 0.42f, 0.40f, 1.0f),
-                               r.on ? "ON" : "OFF");
+                               r.val);
         }
         ImGui::Separator();
         ImGui::TextDisabled("client.dll  0x%llX", static_cast<unsigned long long>(st.clientBase));
@@ -310,11 +313,18 @@ namespace {
         ImGui::Separator();
         ImGui::Spacing();
 
+        const char* raimItems[] = { "Off", "raimv1", "raimv2" };
+        if (ImGui::Combo("Реверс аим: наводка на тимейтов [F1]", &g_m.raim, raimItems, 3)) {
+            const uint32_t mask = nwshared::kFbRaimOn | nwshared::kFbRaimV2;
+            const uint32_t val = (g_m.raim >= 1 ? nwshared::kFbRaimOn : 0u) |
+                                 (g_m.raim == 2 ? nwshared::kFbRaimV2 : 0u);
+            g_m.pendingCmd = viewer.SendCommand(mask, val);
+        }
+
         const auto checkbox = [&](const char* label, uint32_t bit, bool& mirror) {
             if (ImGui::Checkbox(label, &mirror))
                 g_m.pendingCmd = viewer.SendCommand(bit, mirror ? bit : 0);
         };
-        checkbox("Реверс аимбот: наводка на тимейтов [F1]", nwshared::kFbAntiAimbot,   g_m.aa);
         checkbox("Антиаимлесс: взгляд в пол [F2]",          nwshared::kFbAntiAimless,  g_m.al);
         checkbox("Visual recoil x4 [F3]",                   nwshared::kFbVisualRecoil, g_m.vr);
         checkbox("Антибхоп [F4]",                           nwshared::kFbAntiBhop,     g_m.ab);
@@ -358,7 +368,7 @@ namespace {
             g_m.pendingCmd = 0;
         if (g_m.pendingCmd)
             return;
-        g_m.aa = st.antiAimbot != 0;
+        g_m.raim = st.reverseAim > 2 ? 0 : static_cast<int>(st.reverseAim);
         g_m.al = st.antiAimless != 0;
         g_m.vr = st.visualRecoil != 0;
         g_m.ab = st.antiBhop != 0;

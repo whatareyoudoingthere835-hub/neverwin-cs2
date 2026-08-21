@@ -215,11 +215,12 @@ namespace {
                            "professional software for losing professionally");
         ImGui::Separator();
 
-        bool v;
+        int raim = g_features.reverseAim.load();
+        const char* raimItems[] = { "Off", "raimv1", "raimv2" };
+        if (ImGui::Combo("Реверс аим: наводка на тимейтов [F1]", &raim, raimItems, 3))
+            g_features.reverseAim.store(raim);
 
-        v = g_features.antiAimbot.load();
-        if (ImGui::Checkbox("Реверс аимбот: наводка на тимейтов [F1]", &v))
-            g_features.antiAimbot.store(v);
+        bool v;
 
         v = g_features.antiAimless.load();
         if (ImGui::Checkbox("Антиаимлесс: взгляд в пол [F2]", &v))

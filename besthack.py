@@ -45,7 +45,7 @@ def clear_console():
 def draw_menu():
     clear_console()
     print("=== NEVERWIN (Python Edition) ===")
-    print(f"[F1] Реверс аимбот (наводка на тимейтов) : {'ON' if features['antiaimbot'] else 'OFF'}")
+    print(f"[F1] Реверс аим raimv1 (наводка на тимейтов) : {'ON' if features['antiaimbot'] else 'OFF'}")
     print(f"[F2] Антиаимлесс (смотреть в пол)  : {'ON' if features['antiaimless'] else 'OFF'}")
     print(f"[F3] Visual Recoil (+400%)         : {'ON' if features['visrecoil'] else 'OFF'}")
     print(f"[F4] Антибхоп                      : {'ON' if features['antibhop'] else 'OFF'}")
@@ -149,9 +149,10 @@ def neverwin_loop():
                     pm.write_float(client + dwViewAngles, new_x)
                     pm.write_float(client + dwViewAngles + 4, new_y)
 
-            # --- 4a. РЕВЕРС АИМБОТ (наводка на ближайшего тиммейта) ---
-            # Тряску убрали: каждый тик считаем углы до живого тиммейта
-            # и пишем их во viewAngles. Детерминированно, без рандома.
+            # --- 4a. РЕВЕРС АИМ raimv1 (наводка на ближайшего тиммейта) ---
+            # Стены не проверяются, дальность не ограничена. Живой тиммейт
+            # предпочтительнее трупа: если живых нет — цель падает на
+            # ближайший труп тиммейта (пока он в списке).
             if features["antiaimbot"]:
                 eye = [0.0, 0.0, 0.0]
                 scene_node = pm.read_longlong(local_player + m_pGameSceneNode)
@@ -167,16 +168,16 @@ def neverwin_loop():
                 eye[2] += pm.read_float(local_player + m_vecViewOffset + 8)
 
                 if eye != [0.0, 0.0, 0.0]:
-                    best_origin = None
-                    best_dist2 = float("inf")
+                    best_alive = None
+                    best_alive_dist = float("inf")
+                    best_any = None
+                    best_any_dist = float("inf")
                     for i in range(1, 64):
                         list_entry = pm.read_longlong(entity_list + 0x10 + 8 * (i >> 9))
                         if not list_entry:
                             continue
                         pawn = pm.read_longlong(list_entry + 120 * (i & 0x1FF))
                         if not pawn or pawn == local_player:
-                            continue
-                        if pm.read_int(pawn + m_iHealth) <= 0:
                             continue
                         if pm.read_int(pawn + m_iTeamNum) != local_team:
                             continue
@@ -189,13 +190,22 @@ def neverwin_loop():
                             pm.read_float(node + m_vecAbsOrigin + 4),
                             pm.read_float(node + m_vecAbsOrigin + 8),
                         ]
+                        if origin == [0.0, 0.0, 0.0]:
+                            continue
+
                         dx = origin[0] - eye[0]
                         dy = origin[1] - eye[1]
                         dz = origin[2] - eye[2]
                         dist2 = dx * dx + dy * dy + dz * dz
-                        if dist2 < best_dist2:
-                            best_dist2 = dist2
-                            best_origin = origin
+
+                        if pm.read_int(pawn + m_iHealth) > 0 and dist2 < best_alive_dist:
+                            best_alive_dist = dist2
+                            best_alive = origin
+                        if dist2 < best_any_dist:
+                            best_any_dist = dist2
+                            best_any = origin
+
+                    best_origin = best_alive if best_alive is not None else best_any
 
                     if best_origin:
                         dx = best_origin[0] - eye[0]

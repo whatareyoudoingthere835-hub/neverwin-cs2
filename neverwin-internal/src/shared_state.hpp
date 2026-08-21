@@ -22,18 +22,19 @@
 
 namespace nwshared {
 
-    constexpr wchar_t  kMapName[] = L"Local\\neverwin_state_v5";
+    constexpr wchar_t  kMapName[] = L"Local\\neverwin_state_v7";
     constexpr uint32_t kMapSize   = 512;
-    constexpr uint32_t kMagic     = 0x4E573035; // "NW05"
+    constexpr uint32_t kMagic     = 0x4E573037; // "NW07"
 
     // Биты фич в командах.
     enum FeatureBit : uint32_t {
-        kFbAntiAimbot   = 1u << 0, // F1 — реверс аимбот
-        kFbAntiAimless  = 1u << 1, // F2 — взгляд в пол
-        kFbVisualRecoil = 1u << 2, // F3 — отдача x4
-        kFbAntiBhop     = 1u << 3, // F4
-        kFbGamesense    = 1u << 4, // F5
-        kFbUnload       = 1u << 5, // команда: выгрузить DLL
+        kFbRaimOn       = 1u << 0, // F1 — реверс аим включён (v1 или v2)
+        kFbRaimV2       = 1u << 1, // F1 — использовать raimv2 (иначе raimv1)
+        kFbAntiAimless  = 1u << 2, // F2 — взгляд в пол
+        kFbVisualRecoil = 1u << 3, // F3 — отдача x4
+        kFbAntiBhop     = 1u << 4, // F4
+        kFbGamesense    = 1u << 5, // F5
+        kFbUnload       = 1u << 6, // команда: выгрузить DLL
     };
 
     struct State {
@@ -42,7 +43,7 @@ namespace nwshared {
         uint32_t seq;             // инкремент после каждого снапшота
         uint32_t ownerPid;
         uint32_t dllVersion;
-        uint8_t  antiAimbot;
+        uint8_t  reverseAim;      // 0/1/2 (raimv1/raimv2)
         uint8_t  antiAimless;
         uint8_t  visualRecoil;
         uint8_t  antiBhop;

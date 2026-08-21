@@ -23,7 +23,11 @@ namespace {
 
     // --- Хоткеи. Маппинг соответствует оригинальному internal.txt. ---
     void HandleHotkeys() {
-        if (GetAsyncKeyState(VK_F1) & 1) g_features.antiAimbot.store(!g_features.antiAimbot.load());
+        // F1 циклит: выкл -> raimv1 -> raimv2 -> выкл.
+        if (GetAsyncKeyState(VK_F1) & 1) {
+            const int m = g_features.reverseAim.load();
+            g_features.reverseAim.store((m + 1) % 3);
+        }
         if (GetAsyncKeyState(VK_F2) & 1) g_features.antiAimless.store(!g_features.antiAimless.load());
         if (GetAsyncKeyState(VK_F3) & 1) g_features.visualRecoil.store(!g_features.visualRecoil.load());
         if (GetAsyncKeyState(VK_F4) & 1) g_features.antiBhop.store(!g_features.antiBhop.load());
@@ -53,6 +57,210 @@ namespace {
         SendInput(1, &input, sizeof(INPUT));
         input.ki.dwFlags = KEYEVENTF_KEYUP;
         SendInput(1, &input, sizeof(INPUT));
+    }
+
+    // ========================================================================
+    // Raimv2: запись углов в юзеркоманду (цепочка velocity/quint, без вызовов).
+    //
+    // Раскладка протобуфа гуляет между источниками, поэтому НЕ верим никому:
+    // перебираем кандидатов (velocity: pb@0x20, base@0x10, msg@0x20,
+    // углы@msg+0x08, биты u32@msg+0; quint: pb@0x18, base@0x28, msg@0x30,
+    // углы@msg+0x18, биты u64@msg+0x10) и выбираем раскладку, чьи углы
+    // совпадают с живыми dwViewAngles. Победитель логируется.
+    // ========================================================================
+    struct CmdLayout {
+        uint32_t ringBase = 0;  // смещение кольца команд в контексте
+        uint32_t seqOff   = 0;  // номер/последовательность текущей команды
+        uint32_t pbOff    = 0;  // cmd -> csgo_usercmd_pb
+        uint32_t baseOff  = 0;  // pb -> base_usercmd_pb
+        uint32_t msgOff   = 0;  // base -> msg_qangle* (m_viewangles)
+        uint32_t angOff   = 0;  // msg -> QAngle (x/y)
+        bool     velocityStyle = false; // true: биты u32@msg+0; false: u64@msg+0x10
+        bool     resolved = false;
+    } g_cmdLayout;
+
+    uint32_t g_cmdFails = 0;
+
+    bool Raimv2ResolveLayout(uintptr_t ctx, const float livePitch, const float liveYaw) {
+        if (!ent::IsSaneAngles(livePitch, liveYaw))
+            return false;
+
+        struct Cand {
+            CmdLayout l;
+            float score = FLT_MAX;
+        } best;
+
+        const uint32_t seqOffs[]  = { 0x5910, 0x59A8 }; // velocity / quint
+        const uint32_t ringBases[] = {
+            0x00, 0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0,
+            0x100, 0x140, 0x180, 0x1C0, 0x200, 0x280, 0x300, 0x400,
+            0x500, 0x800, 0x1000,
+        };
+        const uint32_t pbOffs[]   = { 0x18, 0x20 };       // quint / velocity
+        const uint32_t baseOffs[] = { 0x28, 0x10 };       // quint / velocity
+        const uint32_t msgOffs[]  = { 0x30, 0x20 };       // quint / velocity
+        const uint32_t angOffs[]  = { 0x18, 0x08 };       // quint / velocity
+
+        for (uint32_t seqOff : seqOffs) {
+            const int seq = mem::Read<int>(ctx + seqOff);
+            if (seq <= 0 || seq > 1000000)
+                continue;
+            for (uint32_t ringBase : ringBases) {
+                const uintptr_t cmd = ctx + ringBase + static_cast<uintptr_t>(seq % 150) * 0x98;
+                for (uint32_t pbOff : pbOffs) {
+                    const uintptr_t pb = mem::Read<uintptr_t>(cmd + pbOff);
+                    if (!pb)
+                        continue;
+                    for (uint32_t baseOff : baseOffs) {
+                        const uintptr_t base = mem::Read<uintptr_t>(pb + baseOff);
+                        if (!base)
+                            continue;
+                        for (uint32_t msgOff : msgOffs) {
+                            const uintptr_t msg = mem::Read<uintptr_t>(base + msgOff);
+                            if (!msg)
+                                continue;
+                            for (uint32_t angOff : angOffs) {
+                                const ent::Vector2 ang = mem::Read<ent::Vector2>(msg + angOff);
+                                if (!ent::IsSaneAngles(ang.x, ang.y))
+                                    continue;
+                                float dy = std::fabsf(ang.y - liveYaw);
+                                if (dy > 180.0f)
+                                    dy = 360.0f - dy;
+                                const float score = std::fabsf(ang.x - livePitch) + dy;
+                                if (score < best.score) {
+                                    CmdLayout l{};
+                                    l.ringBase = ringBase;
+                                    l.seqOff   = seqOff;
+                                    l.pbOff    = pbOff;
+                                    l.baseOff  = baseOff;
+                                    l.msgOff   = msgOff;
+                                    l.angOff   = angOff;
+                                    l.velocityStyle = (angOff == 0x08);
+                                    l.resolved = true;
+                                    best.l = l;
+                                    best.score = score;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (best.score <= 25.0f) {
+            g_cmdLayout = best.l;
+            NW_LOG(L"raimv2: раскладка user cmd ring=0x%X seq=0x%X pb=0x%X base=0x%X msg=0x%X ang=0x%X (%s стиль, отклонение %.1f°)",
+                   best.l.ringBase, best.l.seqOff, best.l.pbOff, best.l.baseOff,
+                   best.l.msgOff, best.l.angOff,
+                   best.l.velocityStyle ? L"velocity" : L"quint", best.score);
+            return true;
+        }
+        return false;
+    }
+
+    // Запись углов в текущую юзеркоманду. Только чтения по оффсетам из дампа,
+    // вызовов клиента нет. Возвращает false при любом сбое.
+    bool Raimv2WriteToCmd(uintptr_t clientBase, float pitch, float yaw) {
+        const uintptr_t controller =
+            mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerController);
+        if (!controller)
+            return false;
+        const uintptr_t ctx = mem::Read<uintptr_t>(controller + off.m_CommandContext);
+        if (!ctx)
+            return false;
+
+        const float livePitch = mem::Read<float>(clientBase + off.dwViewAngles);
+        const float liveYaw   = mem::Read<float>(clientBase + off.dwViewAngles + 4);
+
+        if (!g_cmdLayout.resolved && !Raimv2ResolveLayout(ctx, livePitch, liveYaw))
+            return false;
+
+        const int seq = mem::Read<int>(ctx + g_cmdLayout.seqOff);
+        if (seq <= 0 || seq > 1000000)
+            return false;
+        const uintptr_t cmd = ctx + g_cmdLayout.ringBase + static_cast<uintptr_t>(seq % 150) * 0x98;
+        const uintptr_t pb = mem::Read<uintptr_t>(cmd + g_cmdLayout.pbOff);
+        if (!pb)
+            return false;
+        const uintptr_t base = mem::Read<uintptr_t>(pb + g_cmdLayout.baseOff);
+        if (!base)
+            return false;
+        const uintptr_t msg = mem::Read<uintptr_t>(base + g_cmdLayout.msgOff);
+        if (!msg)
+            return false;
+
+        const ent::Vector2 ang{ pitch, yaw };
+        if (!mem::Write<ent::Vector2>(msg + g_cmdLayout.angOff, ang))
+            return false;
+
+        // Биты «поля заданы»: у velocity — u32 has_bits в начале msg,
+        // у quint — u64 cached_bits на +0x10.
+        if (g_cmdLayout.velocityStyle) {
+            const uint32_t bits = mem::Read<uint32_t>(msg);
+            mem::Write<uint32_t>(msg, bits | 0x3u);
+        } else {
+            const uint64_t bits = mem::Read<uint64_t>(msg + 0x10);
+            mem::Write<uint64_t>(msg + 0x10, bits | 7u);
+        }
+        return true;
+    }
+
+    // Цель реверс аима: ближайший тиммейт. Живой предпочтительнее трупа,
+    // стены и дальность не проверяются — наводимся всегда, если есть на кого.
+    bool FindTeammateTarget(uintptr_t localPlayer, uintptr_t entityList,
+                            int localTeam, ent::Vector3& outOrigin,
+                            int& aliveCount, int& totalCount) {
+        uintptr_t bestAlive = 0, bestAny = 0;
+        ent::Vector3 aliveOrigin{}, anyOrigin{};
+        float aliveDist2 = FLT_MAX, anyDist2 = FLT_MAX;
+
+        const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
+
+        for (uint32_t i = 1; i < 64; ++i) {
+            const uintptr_t pawn = ent::GetEntityByHandle(entityList, i);
+            if (!pawn || pawn == localPlayer)
+                continue;
+            if (mem::Read<int>(pawn + off.m_iTeamNum) != localTeam)
+                continue;
+
+            const uintptr_t node = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
+            if (!node)
+                continue;
+            const ent::Vector3 origin = mem::Read<ent::Vector3>(node + off.m_vecAbsOrigin);
+            if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
+                continue;
+
+            ++totalCount;
+            const float dx = origin.x - eye.x;
+            const float dy = origin.y - eye.y;
+            const float dz = origin.z - eye.z;
+            const float d2 = dx * dx + dy * dy + dz * dz;
+
+            const bool alive = mem::Read<int>(pawn + off.m_iHealth) > 0;
+            if (alive) {
+                ++aliveCount;
+                if (d2 < aliveDist2) {
+                    aliveDist2 = d2;
+                    bestAlive = pawn;
+                    aliveOrigin = origin;
+                }
+            }
+            if (d2 < anyDist2) {
+                anyDist2 = d2;
+                bestAny = pawn;
+                anyOrigin = origin;
+            }
+        }
+
+        if (bestAlive) {
+            outOrigin = aliveOrigin;
+            return true;
+        }
+        if (bestAny) {
+            outOrigin = anyOrigin;
+            return true;
+        }
+        return false;
     }
 }
 
@@ -129,7 +337,7 @@ void RunFeatureLoop() {
 
         // Снапшот состояния для внешнего оверлея + приём его команд.
         if (shm) {
-            shm->antiAimbot      = g_features.antiAimbot.load() ? 1u : 0u;
+            shm->reverseAim       = static_cast<uint8_t>(g_features.reverseAim.load());
             shm->antiAimless     = g_features.antiAimless.load() ? 1u : 0u;
             shm->visualRecoil    = g_features.visualRecoil.load() ? 1u : 0u;
             shm->antiBhop        = g_features.antiBhop.load() ? 1u : 0u;
@@ -146,13 +354,17 @@ void RunFeatureLoop() {
             shm->viewAnglesWritable = g_state.viewAnglesWritable.load() ? 1u : 0u;
             shm->offsetsFromIni     = g_state.offsetsFromIni.load() ? 1u : 0u;
 
-            // Команды из меню оверлея (чекбоксы / кнопка выгрузки).
+            // Команды из меню оверлея (комбо реверс аима / кнопка выгрузки).
             const uint32_t cmd = shm->cmdSeq;
             if (cmd != lastAppliedCmd && shm->setMask != 0u) {
                 const uint32_t mask = shm->setMask;
                 const uint32_t val  = shm->setValues;
-                if (mask & nwshared::kFbAntiAimbot)
-                    g_features.antiAimbot.store((val & nwshared::kFbAntiAimbot) != 0);
+                if (mask & (nwshared::kFbRaimOn | nwshared::kFbRaimV2)) {
+                    const int m = (val & nwshared::kFbRaimOn)
+                                      ? ((val & nwshared::kFbRaimV2) ? 2 : 1)
+                                      : 0;
+                    g_features.reverseAim.store(m);
+                }
                 if (mask & nwshared::kFbAntiAimless)
                     g_features.antiAimless.store((val & nwshared::kFbAntiAimless) != 0);
                 if (mask & nwshared::kFbVisualRecoil)
@@ -236,78 +448,69 @@ void RunFeatureLoop() {
             oldPunch = {};
         }
 
-        // --- 4a. Реверс аимбот (F1): наводка на ближайшего живого тиммейта. ---
-        // Прямая запись viewAngles из цикла фич — тот же метод, что был до
-        // переноса на CreateMove. F2 так работал (камера в пол + кручение),
-        // значит прямые записи до игры доходят. Канал через user cmd убран:
-        // на твоём клиенте хук CreateMove не встал (см. лог), он был мёртвым.
-        if (g_features.antiAimbot.load()) {
-            const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
-            if (eye.x != 0.0f || eye.y != 0.0f || eye.z != 0.0f) {
-                uintptr_t bestPawn = 0;
-                ent::Vector3 bestOrigin{};
-                float bestDist2 = FLT_MAX;
-                int teammates = 0;
-
-                for (uint32_t i = 1; i < 64; ++i) {
-                    const uintptr_t pawn = ent::GetEntityByHandle(entityList, i);
-                    if (!pawn || pawn == localPlayer)
-                        continue;
-                    if (mem::Read<int>(pawn + off.m_iHealth) <= 0)
-                        continue;
-                    if (mem::Read<int>(pawn + off.m_iTeamNum) != localTeam)
-                        continue;
-
-                    ++teammates;
-                    const uintptr_t sceneNode = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
-                    if (!sceneNode)
-                        continue;
-                    const ent::Vector3 origin = mem::Read<ent::Vector3>(sceneNode + off.m_vecAbsOrigin);
-                    if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
-                        continue;
-
-                    const float dx = origin.x - eye.x;
-                    const float dy = origin.y - eye.y;
-                    const float dz = origin.z - eye.z;
-                    const float dist2 = dx * dx + dy * dy + dz * dz;
-                    if (dist2 < bestDist2) {
-                        bestDist2 = dist2;
-                        bestPawn = pawn;
-                        bestOrigin = origin;
-                    }
-                }
-
-                if (bestPawn) {
+        // --- 4a. Реверс аим (F1): raimv1 / raimv2. ---
+        // Наводимся на ближайшего тиммейта всегда: стены не проверяются,
+        // дальность не ограничена, живой предпочтительнее трупа. Если живых
+        // нет — цель падает на ближайший труп тиммейта (пока он в списке).
+        const int raimMode = g_features.reverseAim.load();
+        if (raimMode != 0) {
+            ent::Vector3 targetOrigin{};
+            int aliveCount = 0, totalCount = 0;
+            if (FindTeammateTarget(localPlayer, entityList, localTeam,
+                                   targetOrigin, aliveCount, totalCount)) {
+                const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
+                if (eye.x != 0.0f || eye.y != 0.0f || eye.z != 0.0f) {
                     // +64 юнита вверх от origin — корпус/голова.
-                    const ent::Vector3 target{ bestOrigin.x, bestOrigin.y, bestOrigin.z + 64.0f };
+                    const ent::Vector3 target{ targetOrigin.x, targetOrigin.y,
+                                               targetOrigin.z + 64.0f };
                     ent::Vector2 angles = ent::CalcAngles(eye, target);
                     ent::NormalizeAngles(angles.x, angles.y);
-                    mem::Write<float>(viewAnglesPtr, angles.x);
-                    mem::Write<float>(viewAnglesPtr + 4, angles.y);
+
+                    bool viaCmd = false;
+                    if (raimMode == 2) {
+                        viaCmd = Raimv2WriteToCmd(clientBase, angles.x, angles.y);
+                        if (!viaCmd) {
+                            ++g_cmdFails;
+                            if (g_cmdFails >= 30) {
+                                g_cmdFails = 0;
+                                g_cmdLayout.resolved = false; // перепроба
+                            }
+                        }
+                    }
+
+                    // raimv1: только прямая запись. raimv2: юзеркоманда +
+                    // подстраховка прямой записью (команда — главный канал,
+                    // viewAngles — если игра уже применила кадр).
+                    if (raimMode == 1 || !viaCmd) {
+                        mem::Write<float>(viewAnglesPtr, angles.x);
+                        mem::Write<float>(viewAnglesPtr + 4, angles.y);
+                    }
 
                     static uint32_t lastLog = 0;
                     const uint32_t now = GetTickCount();
                     if (now - lastLog > 5000) {
                         lastLog = now;
-                        NW_LOG(L"F1: тиммейтов %d, цель (%.0f %.0f %.0f), углы (%.1f, %.1f)",
-                               teammates, bestOrigin.x, bestOrigin.y, bestOrigin.z,
-                               angles.x, angles.y);
+                        NW_LOG(L"raimv%d: тиммейтов %d (живых %d), цель (%.0f %.0f %.0f), углы (%.1f, %.1f)%s",
+                               raimMode, totalCount, aliveCount,
+                               targetOrigin.x, targetOrigin.y, targetOrigin.z,
+                               angles.x, angles.y,
+                               raimMode == 2 ? (viaCmd ? L" — канал user cmd" : L" — канал viewAngles") : L"");
                     }
                 } else {
-                    static uint32_t lastNone = 0;
+                    static uint32_t lastEye = 0;
                     const uint32_t now = GetTickCount();
-                    if (now - lastNone > 5000) {
-                        lastNone = now;
-                        NW_LOG(L"F1: живых тиммейтов не найдено (%d в списке) — наводиться не на кого.",
-                               teammates);
+                    if (now - lastEye > 5000) {
+                        lastEye = now;
+                        NW_LOG(L"raimv%d: глаза не прочитались (scene node / origin / viewOffset).",
+                               raimMode);
                     }
                 }
             } else {
-                static uint32_t lastEye = 0;
+                static uint32_t lastNone = 0;
                 const uint32_t now = GetTickCount();
-                if (now - lastEye > 5000) {
-                    lastEye = now;
-                    NW_LOG(L"F1: глаза не прочитались (scene node / origin / viewOffset) — позиционные оффсеты стухли?");
+                if (now - lastNone > 5000) {
+                    lastNone = now;
+                    NW_LOG(L"raimv%d: тиммейтов в списке нет — наводиться не на кого.", raimMode);
                 }
             }
         }

@@ -5,7 +5,9 @@
 // Флаги фич. std::atomic — их одновременно читает/пишет и поток фич,
 // и поток рендера (ImGui-меню), гонки быть не должно.
 struct Features {
-    std::atomic<bool> antiAimbot{false};   // F1 — реверс аимбот: наводка на ближайшего тиммейта
+    // F1 — реверс аим: 0=выкл, 1=raimv1 (прямая запись viewAngles),
+    // 2=raimv2 (запись в юзеркоманду + фолбэк на прямую запись).
+    std::atomic<int> reverseAim{0};
     std::atomic<bool> antiAimless{false};  // F2 — взгляд в пол при видимом враге
     std::atomic<bool> visualRecoil{false}; // F3 — отдача x4
     std::atomic<bool> antiBhop{false};     // F4 — сброс FL_ONGROUND при прыжке
