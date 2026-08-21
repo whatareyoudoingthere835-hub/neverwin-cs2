@@ -175,10 +175,18 @@ def neverwin_loop():
                         pm.read_float(scene_node + m_vecAbsOrigin + 4),
                         pm.read_float(scene_node + m_vecAbsOrigin + 8),
                     ]
-                # m_vecViewOffset теперь поле павна (C_BaseModelEntity)
-                eye[0] += pm.read_float(local_player + m_vecViewOffset)
-                eye[1] += pm.read_float(local_player + m_vecViewOffset + 4)
-                eye[2] += pm.read_float(local_player + m_vecViewOffset + 8)
+                # m_vecViewOffset — CNetworkViewOffsetVector (сетевой тип):
+                # при стухшем оффсете отдаёт мусор (в z уводило прицел в зенит).
+                # Санитайз: вылет за диапазоны — фолбэк 0/0/64.
+                vox = pm.read_float(local_player + m_vecViewOffset)
+                voy = pm.read_float(local_player + m_vecViewOffset + 4)
+                voz = pm.read_float(local_player + m_vecViewOffset + 8)
+                if not (-100.0 <= vox <= 100.0): vox = 0.0
+                if not (-100.0 <= voy <= 100.0): voy = 0.0
+                if not (-200.0 <= voz <= 300.0): voz = 64.0
+                eye[0] += vox
+                eye[1] += voy
+                eye[2] += voz
 
                 if eye != [0.0, 0.0, 0.0]:
                     best_alive = None

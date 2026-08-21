@@ -220,11 +220,13 @@ namespace {
 
     bool FindTeammateTarget(uintptr_t localPlayer, uintptr_t entityList,
                             uint8_t localTeam, ent::Vector3& outOrigin,
+                            int& outHealth,
                             int& aliveCount, int& totalCount,
                             TeamScanStats& stats) {
         uintptr_t bestAlive = 0, bestAny = 0;
         ent::Vector3 aliveOrigin{}, anyOrigin{};
         float aliveDist2 = FLT_MAX, anyDist2 = FLT_MAX;
+        int aliveHealth = 0, anyHealth = 0;
 
         const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
 
@@ -265,21 +267,25 @@ namespace {
                     aliveDist2 = d2;
                     bestAlive = pawn;
                     aliveOrigin = origin;
+                    aliveHealth = mem::Read<int>(pawn + off.m_iHealth);
                 }
             }
             if (d2 < anyDist2) {
                 anyDist2 = d2;
                 bestAny = pawn;
                 anyOrigin = origin;
+                anyHealth = mem::Read<int>(pawn + off.m_iHealth);
             }
         }
 
         if (bestAlive) {
             outOrigin = aliveOrigin;
+            outHealth = aliveHealth;
             return true;
         }
         if (bestAny) {
             outOrigin = anyOrigin;
+            outHealth = anyHealth;
             return true;
         }
         return false;
@@ -484,10 +490,12 @@ void RunFeatureLoop() {
         const int raimMode = g_features.reverseAim.load();
         if (raimMode != 0) {
             ent::Vector3 targetOrigin{};
+            int targetHealth = 0;
             int aliveCount = 0, totalCount = 0;
             TeamScanStats stats;
             if (FindTeammateTarget(localPlayer, entityList, localTeam,
-                                   targetOrigin, aliveCount, totalCount, stats)) {
+                                   targetOrigin, targetHealth,
+                                   aliveCount, totalCount, stats)) {
                 const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
                 if (eye.x != 0.0f || eye.y != 0.0f || eye.z != 0.0f) {
                     // +64 юнита вверх от origin — корпус/голова.
@@ -520,9 +528,11 @@ void RunFeatureLoop() {
                     const uint32_t now = GetTickCount();
                     if (now - lastLog > 5000) {
                         lastLog = now;
-                        NW_LOG(L"raimv%d: тиммейтов %d (живых %d), цель (%.0f %.0f %.0f), углы (%.1f, %.1f)%s",
+                        NW_LOG(L"raimv%d: тиммейтов %d (живых %d), цель (%.0f %.0f %.0f) hp=%d, eye (%.0f %.0f %.0f), углы (%.1f, %.1f)%s",
                                raimMode, totalCount, aliveCount,
                                targetOrigin.x, targetOrigin.y, targetOrigin.z,
+                               targetHealth,
+                               eye.x, eye.y, eye.z,
                                angles.x, angles.y,
                                raimMode == 2 ? (viaCmd ? L" — канал user cmd" : L" — канал viewAngles") : L"");
                     }

@@ -32,14 +32,21 @@ namespace ent {
     }
 
     // Глаза павна: abs origin из сцена-ноды + view offset.
-    // m_vecViewOffset — поле C_BaseModelEntity, читается прямо из павна.
+    // m_vecViewOffset (C_BaseModelEntity, 0xE78) — тип CNetworkViewOffsetVector,
+    // сетевой: при несовпадении билда/оффсета отдаёт не Vector, а мусор.
+    // Мусор в z уводил прицел в зенит (pitch -88°), поэтому диапазоны жёсткие:
+    // вылет за пределы — фолбэк на 0/0/64 (стандартная высота глаз стоя).
     inline Vector3 GetEyePosition(uintptr_t pawn) {
         Vector3 origin{};
         const uintptr_t sceneNode = mem::Read<uintptr_t>(pawn + offsets::g.m_pGameSceneNode);
         if (sceneNode)
             origin = mem::Read<Vector3>(sceneNode + offsets::g.m_vecAbsOrigin);
 
-        const Vector3 viewOffset = mem::Read<Vector3>(pawn + offsets::g.m_vecViewOffset);
+        Vector3 viewOffset = mem::Read<Vector3>(pawn + offsets::g.m_vecViewOffset);
+        if (viewOffset.x < -100.0f || viewOffset.x > 100.0f) viewOffset.x = 0.0f;
+        if (viewOffset.y < -100.0f || viewOffset.y > 100.0f) viewOffset.y = 0.0f;
+        if (viewOffset.z < -200.0f || viewOffset.z > 300.0f) viewOffset.z = 64.0f;
+
         return origin + viewOffset;
     }
 
