@@ -57,6 +57,17 @@ namespace offsets {
         o.m_hActiveWeapon   = ReadHex(L"m_hActiveWeapon",   o.m_hActiveWeapon);
         o.m_iClip1          = ReadHex(L"m_iClip1",          o.m_iClip1);
         o.m_bInReload       = ReadHex(L"m_bInReload",       o.m_bInReload);
+        o.m_pWeaponVData    = ReadHex(L"m_pWeaponVData",    o.m_pWeaponVData);
+        o.m_nDamage         = ReadHex(L"m_nDamage",         o.m_nDamage);
+        o.m_flRange         = ReadHex(L"m_flRange",         o.m_flRange);
+        o.m_flRangeModifier = ReadHex(L"m_flRangeModifier", o.m_flRangeModifier);
+        o.m_flPenetration   = ReadHex(L"m_flPenetration",   o.m_flPenetration);
+        o.m_flArmorRatio    = ReadHex(L"m_flArmorRatio",    o.m_flArmorRatio);
+        o.m_flSpread        = ReadHex(L"m_flSpread",        o.m_flSpread);
+        o.m_bIsScoped       = ReadHex(L"m_bIsScoped",       o.m_bIsScoped);
+        o.m_ArmorValue      = ReadHex(L"m_ArmorValue",      o.m_ArmorValue);
+        o.m_flSimulationTime = ReadHex(L"m_flSimulationTime", o.m_flSimulationTime);
+        o.m_vecAbsVelocity  = ReadHex(L"m_vecAbsVelocity",  o.m_vecAbsVelocity);
         o.listEntryOffset   = ReadHex(L"listEntryOffset",   o.listEntryOffset);
         o.entryStride       = ReadHex(L"entryStride",       o.entryStride);
 

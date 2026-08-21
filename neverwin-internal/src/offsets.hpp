@@ -50,6 +50,21 @@ namespace offsets {
         // --- оружие ---
         std::uintptr_t m_iClip1          = 0x1700; // C_BasePlayerWeapon
         std::uintptr_t m_bInReload       = 0x1814; // C_CSWeaponBase
+        std::uintptr_t m_pWeaponVData    = 0x388;  // C_BasePlayerWeapon -> CCSWeaponBaseVData* (weapon_data)
+
+        // --- CCSWeaponBaseVData ---
+        std::uintptr_t m_nDamage         = 0x828;
+        std::uintptr_t m_flRange         = 0x838;
+        std::uintptr_t m_flRangeModifier = 0x83C;
+        std::uintptr_t m_flPenetration   = 0x834;
+        std::uintptr_t m_flArmorRatio    = 0x830;
+        std::uintptr_t m_flSpread        = 0x758;
+
+        // --- C_CSPlayerPawn ---
+        std::uintptr_t m_bIsScoped       = 0x1C78;
+        std::uintptr_t m_ArmorValue      = 0x1CA4;
+        std::uintptr_t m_flSimulationTime = 0x3B8;
+        std::uintptr_t m_vecAbsVelocity  = 0x3F8;
 
         // --- устройство энтити-листа Source 2 (меняется крайне редко) ---
         // listEntry = entityList + 0x10 + 8 * (index >> 9)

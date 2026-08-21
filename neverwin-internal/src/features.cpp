@@ -5,6 +5,9 @@
 #include "log.hpp"
 #include "memory.hpp"
 #include "offsets.hpp"
+#include "nonagon/ragebot.hpp"
+#include "nonagon/resolver.hpp"
+#include "nonagon/cs2_adapter.hpp"
 
 #include <cmath>
 #include <cfloat>
@@ -31,6 +34,7 @@ namespace {
         if (GetAsyncKeyState(VK_F3) & 1) g_features.visualRecoil.store(!g_features.visualRecoil.load());
         if (GetAsyncKeyState(VK_F4) & 1) g_features.antiBhop.store(!g_features.antiBhop.load());
         if (GetAsyncKeyState(VK_F5) & 1) g_features.gamesense.store(!g_features.gamesense.load());
+        if (GetAsyncKeyState(VK_F6) & 1) g_features.ragebot.store(!g_features.ragebot.load());
         // Тоггл меню клавишами — только когда in-game рендер НЕ встал (Vulkan).
         // Иначе тогглит WndProc-хук: двойной тоггл даст меню, которое само
         // закрывается мгновенно.
@@ -637,8 +641,6 @@ void RunFeatureLoop() {
                 const float spin = g_features.spinSpeed.load();
                 const float curYaw = mem::Read<float>(viewAnglesPtr + 4);
                 float newYaw = curYaw;
-                // 0 — без кручения (только взгляд в пол), 1 — как раньше,
-                // 10 — в десять раз быстрее.
                 if (spin > 0.0f)
                     newYaw = curYaw + 15.0f * spin;
                 if (newYaw > 180.0f) newYaw -= 360.0f;
@@ -650,6 +652,97 @@ void RunFeatureLoop() {
                 if (!logged) {
                     NW_LOG(L"F2: враг виден — камера в пол + кручение (скорость x%.0f).", spin);
                     logged = true;
+                }
+            }
+        }
+
+        // --- 5. Nonagon Ragebot + Resolver (F6) ---
+        if (g_features.ragebot.load()) {
+            // Собираем врагов через entity list
+            std::vector<nonagon_cs2::CS2Player> storage;
+            std::vector<IPlayer*> enemies;
+            storage.reserve(64);
+            enemies.reserve(64);
+
+            int enemyIdx = 0;
+            ent::ForEachPawn(entityList, [&](uintptr_t pawn) {
+                if (pawn == localPlayer) return;
+                if (!mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode)) return;
+                // Дормант скип
+                uintptr_t node = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
+                if (node && mem::Read<uint8_t>(node + off.m_bDormant) != 0) return;
+                if (mem::Read<uint8_t>(pawn + off.m_lifeState) != 0) return;
+                int hp = mem::Read<int>(pawn + off.m_iHealth);
+                if (hp <= 0 || hp > 1000) return;
+                uint8_t team = ent::GetTeam(pawn);
+                if (team == 0 || team == localTeam) return;
+
+                storage.emplace_back(pawn, enemyIdx++, localTeam, entityList);
+            });
+
+            for (auto &p : storage) enemies.push_back(&p);
+
+            if (!enemies.empty()) {
+                nonagon_cs2::CS2LocalPlayer local(localPlayer, clientBase, localTeam, entityList);
+                auto &nonagon = nonagon_cs2::GetNonagon();
+                WeaponConfig wcfg;
+                wcfg.enabled = true;
+                wcfg.max_fov = (float)g_features.rageFov.load();
+                wcfg.hitchance = g_features.rageHitchance.load();
+                wcfg.min_damage = g_features.rageMinDamage.load();
+                wcfg.hitboxes = (1 << HITBOX_HEAD) | (1 << HITBOX_CHEST);
+
+                AimTarget target = nonagon_cs2::SelectTargetWithResolver(&local, enemies, wcfg, nonagon.resolver, 3);
+
+                if (target.valid) {
+                    // Углы к цели
+                    Vec3 eye = local.GetEyePos();
+                    Vec3 aimPos = target.aimPos;
+                    Vec3 delta = {aimPos.x - eye.x, aimPos.y - eye.y, aimPos.z - eye.z};
+                    float dist = std::sqrtf(delta.x*delta.x + delta.y*delta.y + delta.z*delta.z);
+                    if (dist > 0.1f) {
+                        float pitch = std::asin(delta.z / dist) * 180.f / 3.14159265f;
+                        float yaw = std::atan2(delta.y, delta.x) * 180.f / 3.14159265f;
+                        // Нормализация как в raim
+                        if (pitch > 89.f) pitch = 89.f;
+                        if (pitch < -89.f) pitch = -89.f;
+                        while (yaw > 180.f) yaw -= 360.f;
+                        while (yaw < -180.f) yaw += 360.f;
+
+                        // Пишем через юзеркоманду если резолвер вкл, иначе напрямую
+                        bool viaCmd = false;
+                        if (g_features.resolver.load()) {
+                            viaCmd = Raimv2WriteToCmd(clientBase, pitch, yaw);
+                        }
+                        if (!viaCmd) {
+                            mem::Write<float>(viewAnglesPtr, pitch);
+                            mem::Write<float>(viewAnglesPtr + 4, yaw);
+                        }
+
+                        static uint32_t lastRageLog = 0;
+                        uint32_t now = GetTickCount();
+                        if (now - lastRageLog > 2000) {
+                            lastRageLog = now;
+                            const auto &state = nonagon.resolver.GetState(target.playerIndex);
+                            NW_LOG(L"nonagon rage: цель %d hb %d fov %.1f dmg %.0f resolvedYaw %.1f method %d misses %d",
+                                   target.playerIndex, (int)target.hitbox, target.fov, target.damage,
+                                   state.resolvedYaw, (int)state.method, state.missedShots);
+                        }
+
+                        // Авто-огонь
+                        if (local.CanFire()) {
+                            // Форс атаки
+                            local.ForceAttack();
+                        }
+                    }
+                } else {
+                    static uint32_t lastNoTarget = 0;
+                    uint32_t now = GetTickCount();
+                    if (now - lastNoTarget > 5000) {
+                        lastNoTarget = now;
+                        NW_LOG(L"nonagon rage: целей нет (врагов %d), fov %d hc %d dmg %d",
+                               (int)enemies.size(), g_features.rageFov.load(), g_features.rageHitchance.load(), g_features.rageMinDamage.load());
+                    }
                 }
             }
         }

@@ -245,6 +245,27 @@ namespace {
                 if (ImGui::Checkbox("Gamesense: дроп оружия [F5]", &v))
                     g_features.gamesense.store(v);
 
+                bool rage = g_features.ragebot.load();
+                if (ImGui::Checkbox("Nonagon Ragebot: рейдж + резолвер [F6]", &rage))
+                    g_features.ragebot.store(rage);
+                if (rage) {
+                    bool resolver = g_features.resolver.load();
+                    if (ImGui::Checkbox("  Резолвер (brute/lby/side)", &resolver))
+                        g_features.resolver.store(resolver);
+                    bool bt = g_features.backtrack.load();
+                    if (ImGui::Checkbox("  Бэктрек", &bt))
+                        g_features.backtrack.store(bt);
+                    int fov = g_features.rageFov.load();
+                    if (ImGui::SliderInt("  FOV", &fov, 1, 180))
+                        g_features.rageFov.store(fov);
+                    int hc = g_features.rageHitchance.load();
+                    if (ImGui::SliderInt("  Hitchance", &hc, 0, 100))
+                        g_features.rageHitchance.store(hc);
+                    int dmg = g_features.rageMinDamage.load();
+                    if (ImGui::SliderInt("  Min Damage", &dmg, 1, 100))
+                        g_features.rageMinDamage.store(dmg);
+                }
+
                 ImGui::Separator();
 
                 const uintptr_t base = g_state.clientBase.load();
