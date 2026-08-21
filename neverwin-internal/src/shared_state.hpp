@@ -22,9 +22,9 @@
 
 namespace nwshared {
 
-    constexpr wchar_t  kMapName[] = L"Local\\neverwin_state_v4";
+    constexpr wchar_t  kMapName[] = L"Local\\neverwin_state_v5";
     constexpr uint32_t kMapSize   = 512;
-    constexpr uint32_t kMagic     = 0x4E573034; // "NW04"
+    constexpr uint32_t kMagic     = 0x4E573035; // "NW05"
 
     // Биты фич в командах.
     enum FeatureBit : uint32_t {
@@ -48,7 +48,8 @@ namespace nwshared {
         uint8_t  antiBhop;
         uint8_t  gamesense;
         uint8_t  hudVisible;      // F6
-        uint8_t  menuOpen;        // P
+        uint8_t  menuOpen;        // P / INSERT
+        uint8_t  inGameMenu;      // 1 = в игру встал рендер-хук (меню рисует DLL)
         uint8_t  unloadRequested; // END / кнопка в меню
         uint64_t clientBase;
         uint64_t entityList;

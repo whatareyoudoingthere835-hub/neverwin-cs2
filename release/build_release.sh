@@ -72,7 +72,8 @@ retry_on_cache() {
 COMMON=(-target x86_64-windows-gnu -std=c++17 -O2
     -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_CRT_SECURE_NO_WARNINGS
     -DNW_VERSION="$V"
-    -I"$SRC/src" -I"$SRC/thirdparty/imgui" -I"$SRC/thirdparty/imgui/backends")
+    -I"$SRC/src" -I"$SRC/thirdparty/imgui" -I"$SRC/thirdparty/imgui/backends"
+    -I"$SRC/thirdparty/minhook")
 
 # --- import lib для d3dcompiler_47.dll ---
 # В комплекте zig её нет, а imgui_impl_dx12.cpp (оверлей) зовёт D3DCompile().
@@ -84,10 +85,22 @@ DEF
 "$ZIG" dlltool -m i386:x86-64 -d "$WORK/d3dcompiler.def" -l "$WORK/libd3dcompiler.a"
 
 # --- DLL: фаза 1 — каждый TU в свой .o ---
-# Хук рендера из DLL убран (ронял игру при инжекте) — ImGui сюда не входит.
+# Меню в игре (quint-схема): ImGui + dx11-бэкенд + MinHook возвращаются в DLL.
 DLL_SRCS=(
     "$SRC/src/main.cpp" "$SRC/src/features.cpp"
     "$SRC/src/gui.cpp" "$SRC/src/offsets.cpp"
+    "$SRC/thirdparty/imgui/imgui.cpp" "$SRC/thirdparty/imgui/imgui_draw.cpp"
+    "$SRC/thirdparty/imgui/imgui_tables.cpp" "$SRC/thirdparty/imgui/imgui_widgets.cpp"
+    "$SRC/thirdparty/imgui/backends/imgui_impl_win32.cpp"
+    "$SRC/thirdparty/imgui/backends/imgui_impl_dx11.cpp"
+)
+# MinHook — чистый C, компилируем C-компилятором.
+MH_SRCS=(
+    "$SRC/thirdparty/minhook/buffer.c"
+    "$SRC/thirdparty/minhook/hook.c"
+    "$SRC/thirdparty/minhook/trampoline.c"
+    "$SRC/thirdparty/minhook/hde/hde32.c"
+    "$SRC/thirdparty/minhook/hde/hde64.c"
 )
 OBJS=()
 i=0
@@ -97,11 +110,17 @@ for src in "${DLL_SRCS[@]}"; do
     retry_on_cache "$ZIG" c++ "${COMMON[@]}" -c "$src" -o "$obj"
     OBJS+=("$obj")
 done
+for src in "${MH_SRCS[@]}"; do
+    i=$((i + 1))
+    obj="$WORK/obj_$i.o"
+    retry_on_cache "$ZIG" cc -target x86_64-windows-gnu -O2 -I"$SRC/thirdparty/minhook" -c "$src" -o "$obj"
+    OBJS+=("$obj")
+done
 
 # --- DLL: фаза 2 — линковка ---
 retry_on_cache "$ZIG" c++ -target x86_64-windows-gnu -O2 -shared \
     -o "$WORK/neverwin.dll" "${OBJS[@]}" \
-    -luser32 -lkernel32
+    -ld3d11 -ldxgi -ldwmapi -limm32 -luser32 -lgdi32 -lkernel32 -L"$WORK" -ld3dcompiler
 
 # --- инжектор ---
 # injector.cpp объявляет wmain(); crt от mingw зовёт main(), поэтому мост:

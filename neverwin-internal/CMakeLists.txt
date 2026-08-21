@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(neverwin_internal LANGUAGES CXX)
+project(neverwin_internal LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,20 +15,37 @@ if(MSVC)
 endif()
 
 set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/imgui)
+set(MINHOOK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/minhook)
 
 # ---------------------------------------------------------------------------
 # DLL
-# Меню больше не рисуется внутри игры (хук Present убран — он ронял CS2 при
-# инжекте). DLL: фичи + shared memory + хоткеи. Меню/HUD — внешний оверлей.
+# Меню рисуется В ИГРЕ по схеме quintcs2: реальный свопчейн игры из
+# rendersystemdx11.dll (сигнатура), MinHook на Present/ResizeBuffers,
+# InputSystem::IsRelativeMouseMode, WndProc-хук. Никаких dummy-свопчейнов.
+# Не встал рендер (Vulkan) — меню берёт на себя внешний оверлей.
 # ---------------------------------------------------------------------------
 add_library(neverwin SHARED
     src/main.cpp
     src/features.cpp
     src/gui.cpp
     src/offsets.cpp
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp
+    ${MINHOOK_DIR}/buffer.c
+    ${MINHOOK_DIR}/hook.c
+    ${MINHOOK_DIR}/trampoline.c
+    ${MINHOOK_DIR}/hde/hde32.c
+    ${MINHOOK_DIR}/hde/hde64.c
 )
 target_include_directories(neverwin PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${MINHOOK_DIR}
 )
 target_compile_definitions(neverwin PRIVATE
     WIN32_LEAN_AND_MEAN
@@ -38,7 +55,10 @@ target_compile_definitions(neverwin PRIVATE
     _CRT_SECURE_NO_WARNINGS
     NW_VERSION=${NW_VERSION}
 )
-target_link_libraries(neverwin PRIVATE user32)
+# d3d11/dxgi/d3dcompiler нужны ImGui-бэкенду, dwmapi/imm32 — win32-бэкенду.
+# В MSVC они подхватились бы через #pragma comment(lib, ...), MinGW прагмы
+# игнорирует — указываем явно для обоих.
+target_link_libraries(neverwin PRIVATE d3d11 dxgi d3dcompiler dwmapi imm32 user32 gdi32)
 
 # ---------------------------------------------------------------------------
 # Инжектор

@@ -488,7 +488,10 @@ int wmain() {
                     unloadSeenAt = now;
                 if (now - unloadSeenAt > 3000)
                     break;
-            } else if (st.menuOpen) {
+            } else if (st.menuOpen && !st.inGameMenu) {
+                // Меню рисует оверлей только когда DLL не смогла захватить
+                // рендер игры (Vulkan / не нашёлся свопчейн). На DX11 меню
+                // внутри игры — оверлей не дублирует его.
                 mode = Mode::Menu;
                 SyncMirrors(st, viewer);
             } else {

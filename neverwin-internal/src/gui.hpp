@@ -3,22 +3,25 @@
 
 namespace gui {
 
-    // P — показать/скрыть меню. Меню теперь ВНЕШНЕЕ: рендерится оверлеем
-    // neverwin_overlay_vN.exe (DirectX 12), DLL только выставляет флаг в
-    // shared memory. Внутриигрового хука рендера больше нет — именно он
-    // ронял игру при инжекте, когда ImGui рисовал в flip-model свопчейн CS2.
+    // P / INSERT — показать/скрыть меню (тогглит WndProc-хук DLL).
     extern std::atomic<bool> g_menuOpen;
 
-    // Выгрузка: END или кнопка в меню оверлея (команда из shared memory).
+    // Выгрузка: END или кнопка в меню. Снимается на рендер-потоке.
     extern std::atomic<bool> g_unloadRequested;
 
     // F6 — показать/скрыть HUD-оверлей (читает сам оверлей из shared memory).
     extern std::atomic<bool> g_hudVisible;
 
-    // Хуков больше не ставим — всегда true. Оставлено для совместимости
-    // с main.cpp (там ветка предупреждения на случай отказа).
+    // 1 = рендер-хук встал в игру, меню рисует сама DLL (quint-схема).
+    // 0 = не встал (Vulkan / не нашли свопчейн) — меню отдаётся оверлею.
+    extern std::atomic<bool> g_inGameMenuReady;
+
+    // Инициализация меню: свопчейн игры, MinHook на Present/ResizeBuffers,
+    // InputSystem::IsRelativeMouseMode (освобождение мыши), WndProc-хук.
+    // Возвращает false, если свопчейн не найден (фичи работают, меню — оверлей).
     bool Init();
 
-    // Освобождает DLL. Не возвращает управление (FreeLibraryAndExitThread).
+    // Ждёт, пока рендер-поток снимет хуки, и выгружает DLL.
+    // Не возвращает управление (FreeLibraryAndExitThread).
     [[noreturn]] void ShutdownAndExit(HMODULE hModule);
 }

@@ -65,8 +65,15 @@ namespace {
         if (GetAsyncKeyState(VK_F4) & 1) g_features.antiBhop.store(!g_features.antiBhop.load());
         if (GetAsyncKeyState(VK_F5) & 1) g_features.gamesense.store(!g_features.gamesense.load());
         if (GetAsyncKeyState(VK_F6) & 1) gui::g_hudVisible.store(!gui::g_hudVisible.load());
-        if (GetAsyncKeyState('P') & 1)  gui::g_menuOpen.store(!gui::g_menuOpen.load());
-        if (GetAsyncKeyState(VK_INSERT) & 1) gui::g_menuOpen.store(!gui::g_menuOpen.load()); // запасной
+        // Тоггл меню клавишами — только когда in-game рендер НЕ встал (Vulkan).
+        // Иначе тогглит WndProc-хук: двойной тоггл даст меню, которое само
+        // закрывается мгновенно.
+        if (!gui::g_inGameMenuReady.load()) {
+            if (GetAsyncKeyState('P') & 1)
+                gui::g_menuOpen.store(!gui::g_menuOpen.load());
+            if (GetAsyncKeyState(VK_INSERT) & 1)
+                gui::g_menuOpen.store(!gui::g_menuOpen.load());
+        }
         // END — выгрузка: выставляет флаг, цикл фич завершается,
         // ShutdownAndExit освобождает DLL.
         if (GetAsyncKeyState(VK_END) & 1) gui::g_unloadRequested.store(true);
@@ -187,6 +194,7 @@ void RunFeatureLoop() {
             shm->gamesense       = g_features.gamesense.load() ? 1u : 0u;
             shm->hudVisible      = gui::g_hudVisible.load() ? 1u : 0u;
             shm->menuOpen        = gui::g_menuOpen.load() ? 1u : 0u;
+            shm->inGameMenu      = gui::g_inGameMenuReady.load() ? 1u : 0u;
             shm->unloadRequested = 0u;
             shm->clientBase      = clientBase;
             shm->entityList      = entityList;
