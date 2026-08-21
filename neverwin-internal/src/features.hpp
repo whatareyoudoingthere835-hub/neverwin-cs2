@@ -8,10 +8,14 @@ struct Features {
     // F1 — реверс аим: 0=выкл, 1=raimv1 (прямая запись viewAngles),
     // 2=raimv2 (запись в юзеркоманду + фолбэк на прямую запись).
     std::atomic<int> reverseAim{0};
+    // Поворот F1 задаётся во времени, а не длиной движения мыши.
+    // speed — максимум градусов в секунду, smooth — время сглаживания в мс.
+    std::atomic<float> reverseAimSpeed{720.0f};
+    std::atomic<float> reverseAimSmooth{0.0f};
     std::atomic<bool> antiAimless{false};  // F2 — взгляд в пол при видимом враге
     std::atomic<float> spinSpeed{1.0f};    // скорость спинбота F2: 0..10 (множитель)
     std::atomic<bool> visualRecoil{false}; // F3 — отдача x4
-    std::atomic<bool> antiBhop{false};     // F4 — сброс FL_ONGROUND при прыжке
+    std::atomic<bool> bhop{false};         // F4 — обычный auto-bhop при удержании SPACE
     std::atomic<bool> gamesense{true};     // F5 — рандомный дроп оружия (20%)
     // Nonagon ragebot (F6)
     std::atomic<bool> ragebot{false};      // F6 — рейджбот с резолвером из nonagon

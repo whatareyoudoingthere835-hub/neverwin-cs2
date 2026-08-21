@@ -203,8 +203,8 @@ namespace {
 
         const float w = ImGui::GetIO().DisplaySize.x;
         const float h = ImGui::GetIO().DisplaySize.y;
-        ImGui::SetNextWindowSize(ImVec2(440.0f, 400.0f), ImGuiCond_Always);
-        ImGui::SetNextWindowPos(ImVec2((w - 440.0f) * 0.5f, (h - 400.0f) * 0.35f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(520.0f, 430.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowPos(ImVec2((w - 520.0f) * 0.5f, (h - 430.0f) * 0.35f), ImGuiCond_Always);
 
         ImGui::Begin("NEVERWIN", nullptr,
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
@@ -214,82 +214,70 @@ namespace {
                            "professional software for losing professionally");
         ImGui::Separator();
 
-        {
+        if (ImGui::BeginTabBar("neverwin_tabs")) {
+            if (ImGui::BeginTabItem("Combat")) {
                 int raim = g_features.reverseAim.load();
                 const char* raimItems[] = { "Off", "raimv1", "raimv2", "test" };
-                if (ImGui::Combo("Реверс аим: наводка на тимейтов [F1]", &raim, raimItems, 4))
+                if (ImGui::Combo("Reverse aim [F1]", &raim, raimItems, 4))
                     g_features.reverseAim.store(raim);
-
+                if (raim == 1) {
+                    float speed = g_features.reverseAimSpeed.load();
+                    if (ImGui::SliderFloat("Aim speed (deg/s)", &speed, 30.0f, 2160.0f, "%.0f"))
+                        g_features.reverseAimSpeed.store(speed);
+                    float smooth = g_features.reverseAimSmooth.load();
+                    if (ImGui::SliderFloat("Aim smooth (ms)", &smooth, 0.0f, 500.0f, "%.0f"))
+                        g_features.reverseAimSmooth.store(smooth);
+                    ImGui::TextDisabled("Speed is turn rate, not mouse travel distance");
+                }
                 if (raim == 3)
-                    ImGui::TextDisabled("test: юзеркоманда (канал андромеды) + страховка viewAngles");
+                    ImGui::TextDisabled("test: usercmd channel diagnostic");
 
-                bool v;
-
-                v = g_features.antiAimless.load();
-                if (ImGui::Checkbox("Антиаимлесс: взгляд в пол [F2]", &v))
+                bool v = g_features.antiAimless.load();
+                if (ImGui::Checkbox("Antiaimless [F2]", &v))
                     g_features.antiAimless.store(v);
-
                 float spin = g_features.spinSpeed.load();
-                if (ImGui::SliderFloat("Скорость спинбота (0-10)", &spin, 0.0f, 10.0f, "x%.0f"))
+                if (ImGui::SliderFloat("Spin speed", &spin, 0.0f, 10.0f, "x%.0f"))
                     g_features.spinSpeed.store(spin);
 
-                v = g_features.visualRecoil.load();
-                if (ImGui::Checkbox("Visual recoil x4 [F3]", &v))
-                    g_features.visualRecoil.store(v);
-
-                v = g_features.antiBhop.load();
-                if (ImGui::Checkbox("Антибхоп [F4]", &v))
-                    g_features.antiBhop.store(v);
-
-                v = g_features.gamesense.load();
-                if (ImGui::Checkbox("Gamesense: дроп оружия [F5]", &v))
-                    g_features.gamesense.store(v);
-
                 bool rage = g_features.ragebot.load();
-                if (ImGui::Checkbox("Nonagon Ragebot: рейдж + резолвер [F6]", &rage))
+                if (ImGui::Checkbox("Nonagon Ragebot [F6]", &rage))
                     g_features.ragebot.store(rage);
                 if (rage) {
                     bool autoFire = g_features.rageAutoFire.load();
-                    if (ImGui::Checkbox("  Автоогонь / триггер", &autoFire))
-                        g_features.rageAutoFire.store(autoFire);
-                    ImGui::TextDisabled("  Стреляет только по повторно проверенной живой цели");
+                    if (ImGui::Checkbox("Auto fire / trigger", &autoFire)) g_features.rageAutoFire.store(autoFire);
                     bool resolver = g_features.resolver.load();
-                    if (ImGui::Checkbox("  Резолвер (brute/lby/side)", &resolver))
-                        g_features.resolver.store(resolver);
-                    bool bt = g_features.backtrack.load();
-                    if (ImGui::Checkbox("  Бэктрек", &bt))
-                        g_features.backtrack.store(bt);
+                    if (ImGui::Checkbox("Resolver", &resolver)) g_features.resolver.store(resolver);
                     int fov = g_features.rageFov.load();
-                    if (ImGui::SliderInt("  FOV", &fov, 1, 180))
-                        g_features.rageFov.store(fov);
-                    int hc = g_features.rageHitchance.load();
-                    if (ImGui::SliderInt("  Hitchance", &hc, 0, 100))
-                        g_features.rageHitchance.store(hc);
-                    int dmg = g_features.rageMinDamage.load();
-                    if (ImGui::SliderInt("  Min Damage", &dmg, 1, 100))
-                        g_features.rageMinDamage.store(dmg);
+                    if (ImGui::SliderInt("Rage FOV", &fov, 1, 180)) g_features.rageFov.store(fov);
                 }
-
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Movement")) {
+                bool bhop = g_features.bhop.load();
+                if (ImGui::Checkbox("Auto bhop [F4]", &bhop)) g_features.bhop.store(bhop);
+                ImGui::TextDisabled("Hold SPACE to jump automatically on landing.");
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Misc")) {
+                ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1.0f), "tg: @fkfwj");
                 ImGui::Separator();
-
+                ImGui::TextDisabled("More misc features coming later.");
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Settings")) {
+                bool v = g_features.visualRecoil.load();
+                if (ImGui::Checkbox("Visual recoil x4 [F3]", &v)) g_features.visualRecoil.store(v);
+                v = g_features.gamesense.load();
+                if (ImGui::Checkbox("Gamesense [F5]", &v)) g_features.gamesense.store(v);
+                ImGui::Separator();
                 const uintptr_t base = g_state.clientBase.load();
-                ImGui::Text("client.dll:  0x%llX", static_cast<unsigned long long>(base));
-                ImGui::Text("LocalPlayer: 0x%llX  (hp %d, team %d)",
-                            static_cast<unsigned long long>(g_state.localPlayer.load()),
-                            g_state.localHealth.load(),
-                            g_state.localTeam.load());
-                ImGui::TextColored(
-                    g_state.offsetsFromIni.load() ? ImVec4(0.45f, 1.0f, 0.55f, 1.0f) : ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
-                    "%s",
-                    g_state.offsetsFromIni.load()
-                        ? "Оффсеты: из neverwin.ini"
-                        : "Оффсеты: ВСТРОЕННЫЕ — Valve обновили игру? Сгенерируй ini!");
-
-                if (ImGui::Button("Выгрузить DLL", ImVec2(-1, 0))) {
-                    gui::g_unloadRequested.store(true);
-                }
-                ImGui::TextDisabled("v%d | P/INSERT - меню | END - выгрузка", NW_VERSION);
-
+                ImGui::Text("client.dll: 0x%llX", static_cast<unsigned long long>(base));
+                ImGui::Text("Local: 0x%llX (hp %d, team %d)", static_cast<unsigned long long>(g_state.localPlayer.load()), g_state.localHealth.load(), g_state.localTeam.load());
+                if (ImGui::Button("Detach / unload DLL", ImVec2(-1, 0))) gui::g_unloadRequested.store(true);
+                ImGui::TextDisabled("v%d | P/INSERT menu | END unload", NW_VERSION);
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
         }
 
         ImGui::End();

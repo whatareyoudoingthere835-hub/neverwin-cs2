@@ -9,6 +9,7 @@
 #include "nonagon/resolver.hpp"
 #include "nonagon/cs2_adapter.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cfloat>
 #include <random>
@@ -32,7 +33,7 @@ namespace {
         }
         if (GetAsyncKeyState(VK_F2) & 1) g_features.antiAimless.store(!g_features.antiAimless.load());
         if (GetAsyncKeyState(VK_F3) & 1) g_features.visualRecoil.store(!g_features.visualRecoil.load());
-        if (GetAsyncKeyState(VK_F4) & 1) g_features.antiBhop.store(!g_features.antiBhop.load());
+        if (GetAsyncKeyState(VK_F4) & 1) g_features.bhop.store(!g_features.bhop.load());
         if (GetAsyncKeyState(VK_F5) & 1) g_features.gamesense.store(!g_features.gamesense.load());
         if (GetAsyncKeyState(VK_F6) & 1) g_features.ragebot.store(!g_features.ragebot.load());
         // Тоггл меню клавишами — только когда in-game рендер НЕ встал (Vulkan).
@@ -437,6 +438,38 @@ namespace {
         return true;
     }
 
+    // Плавный доводчик F1. Скорость измеряется в градусах/сек, поэтому не
+    // зависит от расстояния до цели и частоты feature loop.
+    ent::Vector2 StepReverseAim(const ent::Vector2& current, const ent::Vector2& target) {
+        static DWORD lastAt = GetTickCount();
+        const DWORD now = GetTickCount();
+        const float dt = std::clamp(static_cast<float>(now - lastAt) / 1000.0f, 0.001f, 0.05f);
+        lastAt = now;
+
+        float dp = target.x - current.x;
+        float dy = target.y - current.y;
+        while (dy > 180.0f) dy -= 360.0f;
+        while (dy < -180.0f) dy += 360.0f;
+
+        const float smoothMs = g_features.reverseAimSmooth.load();
+        const float response = smoothMs <= 0.0f ? 1.0f :
+            1.0f - std::exp(-dt * 1000.0f / smoothMs);
+        dp *= response;
+        dy *= response;
+
+        const float maxStep = std::max(1.0f, g_features.reverseAimSpeed.load() * dt);
+        const float length = std::sqrtf(dp * dp + dy * dy);
+        if (length > maxStep) {
+            const float scale = maxStep / length;
+            dp *= scale;
+            dy *= scale;
+        }
+
+        ent::Vector2 out{current.x + dp, current.y + dy};
+        ent::NormalizeAngles(out.x, out.y);
+        return out;
+    }
+
     // SendInput DOWN+UP в одном проходе часто попадал между игровыми тиками и
     // терялся. Автоогонь держит кнопку коротким импульсом и всегда отпускает
     // её при выключении фичи, открытии меню, потере фокуса или выгрузке DLL.
@@ -607,12 +640,32 @@ void RunFeatureLoop() {
         const uint8_t localTeam = ent::GetTeam(localPlayer);
         g_state.localTeam.store(localTeam);
 
-        // --- 1. Антибхоп: пока нажат пробел — снимаем FL_ONGROUND (бит 0). ---
-        if (g_features.antiBhop.load() && (GetAsyncKeyState(VK_SPACE) & 0x8000)) {
-            const uint32_t flags = mem::Read<uint32_t>(localPlayer + off.m_fFlags);
-            if ((flags & 1u) != 0u) {
-                mem::Write<uint32_t>(localPlayer + off.m_fFlags, flags & ~1u);
+        // --- 1. Обычный auto-bhop (F4). ---
+        // Не трогаем m_fFlags: это состояние игры, а не input. Пока пользователь
+        // держит SPACE, отпускаем синтетический jump в воздухе и нажимаем его
+        // при приземлении — игра получает нормальный новый jump-press.
+        static bool jumpHeld = false;
+        const bool bhopActive = g_features.bhop.load() && (GetAsyncKeyState(VK_SPACE) & 0x8000);
+        if (bhopActive) {
+            const bool onGround = (mem::Read<uint32_t>(localPlayer + off.m_fFlags) & 1u) != 0;
+            INPUT input{};
+            input.type = INPUT_KEYBOARD;
+            input.ki.wVk = VK_SPACE;
+            if (onGround && !jumpHeld) {
+                SendInput(1, &input, sizeof(input));
+                jumpHeld = true;
+            } else if (!onGround && jumpHeld) {
+                input.ki.dwFlags = KEYEVENTF_KEYUP;
+                SendInput(1, &input, sizeof(input));
+                jumpHeld = false;
             }
+        } else if (jumpHeld) {
+            INPUT input{};
+            input.type = INPUT_KEYBOARD;
+            input.ki.wVk = VK_SPACE;
+            input.ki.dwFlags = KEYEVENTF_KEYUP;
+            SendInput(1, &input, sizeof(input));
+            jumpHeld = false;
         }
 
         // --- 2. Gamesense: 20% шанс дропа оружия при выстреле/перезарядке. ---
@@ -688,8 +741,10 @@ void RunFeatureLoop() {
                     // +64 юнита вверх от origin — корпус/голова.
                     const ent::Vector3 target{ targetOrigin.x, targetOrigin.y,
                                                targetOrigin.z + 64.0f };
-                    ent::Vector2 angles = ent::CalcAngles(eye, target);
-                    ent::NormalizeAngles(angles.x, angles.y);
+                    ent::Vector2 targetAngles = ent::CalcAngles(eye, target);
+                    ent::NormalizeAngles(targetAngles.x, targetAngles.y);
+                    const ent::Vector2 currentAngles = mem::Read<ent::Vector2>(viewAnglesPtr);
+                    ent::Vector2 angles = StepReverseAim(currentAngles, targetAngles);
 
                     bool viaCmd = false;
                     if (raimMode == 2 || raimMode == 3) {
