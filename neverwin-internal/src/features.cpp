@@ -220,10 +220,26 @@ namespace {
     // по этим числам видно, на каком шаге цепочка рвётся, если рвётся.
     struct TeamScanStats {
         int pawns = 0, enemies = 0, teammates = 0, withNode = 0, withOrigin = 0;
+        int withDormant = 0, withNoDormant = 0;
+        int withLifeDead = 0, withLifeAlive = 0;
+        int withHealthZero = 0, withHealthGarbage = 0;
+        int withClose = 0;
         // Гистограмма: павнов и живых (hp>0) по значению команды.
         // Индексы 0..3 = команды 0..3, индекс 4 = всё остальное.
         int teamPawns[5] = {0, 0, 0, 0, 0};
         int teamAlive[5] = {0, 0, 0, 0, 0};
+        // Для дебага: первые 5 тиммейтов что отвалились
+        struct FailSample {
+            uintptr_t pawn = 0;
+            int hp = 0;
+            uint8_t ls = 0;
+            uint8_t dormant = 0;
+            uint8_t team = 0;
+            float dist = 0;
+            bool hasNode = false;
+            bool hasOrigin = false;
+        } failSamples[5];
+        int failCount = 0;
     };
 
     bool FindTeammateTarget(uintptr_t localPlayer, uintptr_t entityList,
@@ -252,46 +268,89 @@ namespace {
             if (teamHp > 0 && teamHp <= 1000)
                 ++stats.teamAlive[tIdx];
             if (team != localTeam) {
-                if (team != 0 && teamHp > 0)
-                    ++stats.enemies;
+                // Более строгий подсчет врагов: только живые (hp>0 && <=1000 && lifeState==0)
+                if (team != 0 && teamHp > 0 && teamHp <= 1000) {
+                    if (mem::Read<uint8_t>(pawn + off.m_lifeState) == 0)
+                        ++stats.enemies;
+                }
                 return;
             }
 
             ++stats.teammates;
             const uintptr_t node = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
-            if (!node)
+            if (!node) {
+                if (stats.failCount < 5) {
+                    auto &s = stats.failSamples[stats.failCount++];
+                    s.pawn = pawn; s.team = team; s.hasNode = false;
+                }
                 return;
+            }
             ++stats.withNode;
 
-            // Дормант — игрок вне PVS, у него хп может быть 0 и origin старый.
-            // Скипаем дормант, иначе считаем мертвых/мусор за живых.
-            if (mem::Read<uint8_t>(node + off.m_bDormant) != 0)
+            const uint8_t dormant = mem::Read<uint8_t>(node + off.m_bDormant);
+            if (dormant != 0) {
+                ++stats.withDormant;
+                if (stats.failCount < 5) {
+                    auto &s = stats.failSamples[stats.failCount++];
+                    s.pawn = pawn; s.team = team; s.dormant = dormant; s.hasNode = true;
+                }
                 return;
+            }
+            ++stats.withNoDormant;
 
             const ent::Vector3 origin = mem::Read<ent::Vector3>(node + off.m_vecAbsOrigin);
-            if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
+            if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f) {
+                if (stats.failCount < 5) {
+                    auto &s = stats.failSamples[stats.failCount++];
+                    s.pawn = pawn; s.team = team; s.hasNode = true; s.hasOrigin = false;
+                }
                 return;
+            }
             ++stats.withOrigin;
 
             const float dx = origin.x - eye.x;
             const float dy = origin.y - eye.y;
             const float dz = origin.z - eye.z;
             const float d2 = dx * dx + dy * dy + dz * dz;
+            const float dist = std::sqrtf(d2);
 
-            // Ближе 64 юнитов (труп под камерой, тиммейт вплотную) — почти
-            // вертикальные углы, бесполезно.
-            if (d2 < 64.0f * 64.0f)
+            if (d2 < 64.0f * 64.0f) {
+                ++stats.withClose;
+                if (stats.failCount < 5) {
+                    auto &s = stats.failSamples[stats.failCount++];
+                    s.pawn = pawn; s.team = team; s.dist = dist; s.hasNode = true; s.hasOrigin = true;
+                }
                 return;
+            }
 
             ++totalCount;
-            // Живой: hp в разумных пределах + lifeState == 0 (LIFE_ALIVE).
-            // Раньше проверяли только hp — из-за дорманта/битых ридов hp=0
-            // и всех считали мертвыми. Теперь проверяем и lifeState.
-            if (mem::Read<uint8_t>(pawn + off.m_lifeState) != 0)
+            const uint8_t ls = mem::Read<uint8_t>(pawn + off.m_lifeState);
+            if (ls != 0) {
+                ++stats.withLifeDead;
+                if (stats.failCount < 5) {
+                    auto &s = stats.failSamples[stats.failCount++];
+                    s.pawn = pawn; s.team = team; s.ls = ls; s.dist = dist; s.hasNode = true; s.hasOrigin = true;
+                }
                 return;
+            }
+            ++stats.withLifeAlive;
             const int hp = mem::Read<int>(pawn + off.m_iHealth);
-            if (hp <= 0 || hp > 1000)
+            if (hp <= 0) {
+                ++stats.withHealthZero;
+                if (stats.failCount < 5) {
+                    auto &s = stats.failSamples[stats.failCount++];
+                    s.pawn = pawn; s.team = team; s.hp = hp; s.ls = ls; s.dist = dist; s.hasNode = true; s.hasOrigin = true;
+                }
                 return;
+            }
+            if (hp > 1000) {
+                ++stats.withHealthGarbage;
+                if (stats.failCount < 5) {
+                    auto &s = stats.failSamples[stats.failCount++];
+                    s.pawn = pawn; s.team = team; s.hp = hp; s.ls = ls; s.dist = dist; s.hasNode = true; s.hasOrigin = true;
+                }
+                return;
+            }
 
             ++aliveCount;
             if (d2 < bestDist2) {
@@ -510,15 +569,23 @@ void RunFeatureLoop() {
                 const uint32_t now = GetTickCount();
                 if (now - lastNone > 5000) {
                     lastNone = now;
-                    NW_LOG(L"raimv%d: живых тиммейтов нет. скан 64 блоков: павнов %d, врагов %d, команды t0=%d/%d t1=%d/%d t2=%d/%d t3=%d/%d др=%d/%d (павнов/живых), local hp=%d ls=%d team=%d",
-                           raimMode, stats.pawns, stats.enemies,
+                    const ent::Vector3 eyeDbg = ent::GetEyePosition(localPlayer);
+                    NW_LOG(L"raimv%d: живых тиммейтов нет. скан 64 блоков: павнов %d, врагов %d, teammates %d (total %d alive %d) node %d origin %d nodorm %d/%d life %d/%d hp0 %d garbage %d close %d, команды t0=%d/%d t1=%d/%d t2=%d/%d t3=%d/%d др=%d/%d (павнов/живых), local hp=%d ls=%d team=%d eye %.0f %.0f %.0f",
+                           raimMode, stats.pawns, stats.enemies, stats.teammates, totalCount, aliveCount,
+                           stats.withNode, stats.withOrigin, stats.withNoDormant, stats.withDormant,
+                           stats.withLifeAlive, stats.withLifeDead, stats.withHealthZero, stats.withHealthGarbage, stats.withClose,
                            stats.teamPawns[0], stats.teamAlive[0],
                            stats.teamPawns[1], stats.teamAlive[1],
                            stats.teamPawns[2], stats.teamAlive[2],
                            stats.teamPawns[3], stats.teamAlive[3],
                            stats.teamPawns[4], stats.teamAlive[4],
                            health, mem::Read<uint8_t>(localPlayer + off.m_lifeState),
-                           static_cast<int>(localTeam));
+                           static_cast<int>(localTeam), eyeDbg.x, eyeDbg.y, eyeDbg.z);
+                    for (int i = 0; i < stats.failCount && i < 5; ++i) {
+                        auto &s = stats.failSamples[i];
+                        NW_LOG(L"  fail %d: pawn 0x%llX team %d hp %d ls %d dormant %d dist %.0f node %d origin %d",
+                               i, (unsigned long long)s.pawn, (int)s.team, s.hp, (int)s.ls, (int)s.dormant, s.dist, s.hasNode ? 1 : 0, s.hasOrigin ? 1 : 0);
+                    }
 
                     // test-режим: проверяем канал юзеркоманды даже без цели —
                     // проба раскладки против живых viewAngles.
@@ -528,7 +595,8 @@ void RunFeatureLoop() {
                         const uintptr_t ctx = controller
                             ? mem::Read<uintptr_t>(controller + off.m_CommandContext) : 0;
                         if (!ctx) {
-                            NW_LOG(L"test: контроллер или m_CommandContext не читаются");
+                            NW_LOG(L"test: контроллер 0x%llX ctx 0x%llX — m_CommandContext 0x%llX не читается (IsValidPtr?)",
+                                   (unsigned long long)controller, (unsigned long long)ctx, (unsigned long long)off.m_CommandContext);
                         } else if (Raimv2ResolveLayout(ctx, mem::Read<float>(viewAnglesPtr),
                                                        mem::Read<float>(viewAnglesPtr + 4))) {
                             NW_LOG(L"test: раскладка user cmd найдена: ring=0x%X seq=0x%X pb=0x%X base=0x%X msg=0x%X ang=0x%X",
