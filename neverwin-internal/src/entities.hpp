@@ -122,11 +122,21 @@ namespace ent {
         const auto& off = offsets::g;
         out.controllerAlive =
             mem::Read<uint8_t>(out.controller + off.m_bPawnIsAlive) != 0;
-        out.pawnHandle = mem::Read<uint32_t>(out.controller + off.m_hPlayerPawn);
-        if (!IsValidPlayerHandle(out.pawnHandle))
-            return out;
 
-        out.pawn = GetEntityByHandle(entityList, out.pawnHandle);
+        // m_hPlayerPawn из CCSPlayerController бывает пустым на живом
+        // controller в актуальных клиентах. Базовый m_hPawn содержит ту же
+        // связь и является корректным fallback, а не эвристикой по памяти.
+        out.pawnHandle = mem::Read<uint32_t>(out.controller + off.m_hPlayerPawn);
+        if (IsValidPlayerHandle(out.pawnHandle))
+            out.pawn = GetEntityByHandle(entityList, out.pawnHandle);
+
+        if (!out.pawn) {
+            const uint32_t basePawnHandle = mem::Read<uint32_t>(out.controller + off.m_hPawn);
+            if (IsValidPlayerHandle(basePawnHandle)) {
+                out.pawnHandle = basePawnHandle;
+                out.pawn = GetEntityByHandle(entityList, out.pawnHandle);
+            }
+        }
         if (!out.pawn)
             return out;
 
@@ -166,8 +176,15 @@ namespace ent {
         if (mem::Read<uint8_t>(controller + off.m_bPawnIsAlive) == 0)
             return false;
 
-        const uint32_t handle = mem::Read<uint32_t>(controller + off.m_hPlayerPawn);
-        if (!IsValidPlayerHandle(handle) || GetEntityByHandle(entityList, handle) != expectedPawn)
+        uint32_t handle = mem::Read<uint32_t>(controller + off.m_hPlayerPawn);
+        uintptr_t resolved = IsValidPlayerHandle(handle)
+            ? GetEntityByHandle(entityList, handle) : 0;
+        if (resolved != expectedPawn) {
+            handle = mem::Read<uint32_t>(controller + off.m_hPawn);
+            resolved = IsValidPlayerHandle(handle)
+                ? GetEntityByHandle(entityList, handle) : 0;
+        }
+        if (resolved != expectedPawn)
             return false;
 
         return IsPawnAlive(expectedPawn);

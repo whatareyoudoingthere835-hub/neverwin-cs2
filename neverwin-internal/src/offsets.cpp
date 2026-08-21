@@ -58,6 +58,7 @@ namespace offsets {
         o.m_iIDEntIndex     = ReadHex(L"m_iIDEntIndex",     o.m_iIDEntIndex);
         o.m_hPlayerPawn     = ReadHex(L"m_hPlayerPawn",     o.m_hPlayerPawn);
         o.m_bPawnIsAlive    = ReadHex(L"m_bPawnIsAlive",    o.m_bPawnIsAlive);
+        o.m_hPawn           = ReadHex(L"m_hPawn",           o.m_hPawn);
         o.m_hController     = ReadHex(L"m_hController",     o.m_hController);
         o.m_nTickBase       = ReadHex(L"m_nTickBase",       o.m_nTickBase);
         o.m_CommandContext  = ReadHex(L"m_CommandContext",  o.m_CommandContext);

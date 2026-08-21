@@ -45,8 +45,11 @@ namespace offsets {
         // --- CCSPlayerController / CBasePlayerController ---
         // Единственный надёжный путь перечисления игроков:
         // controller -> m_hPlayerPawn -> pawn + согласованный alive-флаг.
+        // CCSPlayerController. На текущих клиентах поле может быть пустым,
+        // поэтому оно дополняется базовым CBasePlayerController::m_hPawn ниже.
         std::uintptr_t m_hPlayerPawn      = 0x914;
         std::uintptr_t m_bPawnIsAlive     = 0x91C;
+        std::uintptr_t m_hPawn            = 0x6BC;  // CBasePlayerController
         // Обратная связь pawn -> controller; используется для верифицированного
         // fallback-скана reverse aim.
         std::uintptr_t m_hController      = 0x13D0;

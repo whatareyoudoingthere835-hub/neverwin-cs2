@@ -37,7 +37,7 @@ CLASS_KEYS = {
     "C_BasePlayerPawn":       ("m_pCameraServices", "m_pWeaponServices", "m_hController"),
     "C_CSPlayerPawn":         ("m_bWaitForNoAttack", "m_bGunGameImmunity", "m_iIDEntIndex"),
     "CCSPlayerController":    ("m_hPlayerPawn", "m_bPawnIsAlive"),
-    "CBasePlayerController":  ("m_nTickBase", "m_CommandContext"),
+    "CBasePlayerController":  ("m_nTickBase", "m_CommandContext", "m_hPawn"),
     "CPlayer_CameraServices": ("m_vecCsViewPunchAngle",),
     "CPlayer_WeaponServices": ("m_hActiveWeapon",),
     "C_BasePlayerWeapon":     ("m_iClip1", "m_nNextPrimaryAttackTick"),
