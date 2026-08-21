@@ -73,40 +73,11 @@ target_compile_definitions(neverwin_injector PRIVATE
 )
 
 # ---------------------------------------------------------------------------
-# Внешний оверлей: меню + HUD на DirectX 12 (ImGui + imgui_impl_dx12).
-# Не инжектится: читает shared memory, команды шлёт обратно в DLL.
-# ---------------------------------------------------------------------------
-add_executable(neverwin_overlay
-    overlay/overlay.cpp
-    ${IMGUI_DIR}/imgui.cpp
-    ${IMGUI_DIR}/imgui_draw.cpp
-    ${IMGUI_DIR}/imgui_tables.cpp
-    ${IMGUI_DIR}/imgui_widgets.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_dx12.cpp
-)
-target_include_directories(neverwin_overlay PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
-)
-target_compile_definitions(neverwin_overlay PRIVATE
-    UNICODE
-    _UNICODE
-    _CRT_SECURE_NO_WARNINGS
-    WIN32_LEAN_AND_MEAN
-    NOMINMAX
-    NW_VERSION=${NW_VERSION}
-)
-target_link_libraries(neverwin_overlay PRIVATE d3d12 dxgi d3dcompiler dwmapi imm32 user32 gdi32)
-
-# ---------------------------------------------------------------------------
 # Флаги по компиляторам
 # ---------------------------------------------------------------------------
 if(MSVC)
     target_compile_options(neverwin PRIVATE /W4 /utf-8)
     target_compile_options(neverwin_injector PRIVATE /W4 /utf-8)
-    target_compile_options(neverwin_overlay PRIVATE /W4 /utf-8)
 endif()
 
 if(MINGW)

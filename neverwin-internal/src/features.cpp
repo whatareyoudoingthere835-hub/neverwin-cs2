@@ -5,7 +5,6 @@
 #include "log.hpp"
 #include "memory.hpp"
 #include "offsets.hpp"
-#include "shared_state.hpp"
 
 #include <cmath>
 #include <cfloat>
@@ -32,7 +31,6 @@ namespace {
         if (GetAsyncKeyState(VK_F3) & 1) g_features.visualRecoil.store(!g_features.visualRecoil.load());
         if (GetAsyncKeyState(VK_F4) & 1) g_features.antiBhop.store(!g_features.antiBhop.load());
         if (GetAsyncKeyState(VK_F5) & 1) g_features.gamesense.store(!g_features.gamesense.load());
-        if (GetAsyncKeyState(VK_F6) & 1) gui::g_hudVisible.store(!gui::g_hudVisible.load());
         // Тоггл меню клавишами — только когда in-game рендер НЕ встал (Vulkan).
         // Иначе тогглит WndProc-хук: двойной тоггл даст меню, которое само
         // закрывается мгновенно.
@@ -384,32 +382,17 @@ void RunFeatureLoop() {
     const uintptr_t localPlayerPtr = clientBase + off.dwLocalPlayerPawn;
     const uintptr_t viewAnglesPtr  = clientBase + off.dwViewAngles;
 
-    // Внешний HUD-оверлей читает состояние отсюда.
-    nwshared::Publisher shm;
-    if (shm) {
-        shm->dllVersion = NW_VERSION;
-    } else {
-        NW_LOG(L"WARNING: shared memory не создалась — внешний оверлей не увидит состояние.");
-    }
-
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<int> dropChance(1, 100);
 
     int previousAmmo = -1;
     Vector2 oldPunch{};
-    uint32_t lastAppliedCmd = 0; // последняя применённая команда оверлея
-
     for (;;) {
         Sleep(1);
         HandleHotkeys();
-        if (gui::g_unloadRequested.load()) {
-            if (shm) {
-                shm->unloadRequested = 1;
-                shm.Commit();
-            }
+        if (gui::g_unloadRequested.load())
             return;
-        }
 
         const uintptr_t localPlayer = mem::Read<uintptr_t>(localPlayerPtr);
         g_state.localPlayer.store(localPlayer);
@@ -434,67 +417,6 @@ void RunFeatureLoop() {
 
         const uint8_t localTeam = ent::GetTeam(localPlayer);
         g_state.localTeam.store(localTeam);
-
-        // Снапшот состояния для внешнего оверлея + приём его команд.
-        if (shm) {
-            shm->reverseAim       = static_cast<uint8_t>(g_features.reverseAim.load());
-            shm->antiAimless     = g_features.antiAimless.load() ? 1u : 0u;
-            shm->spinSpeed       = static_cast<uint8_t>(g_features.spinSpeed.load() + 0.5f);
-            shm->visualRecoil    = g_features.visualRecoil.load() ? 1u : 0u;
-            shm->antiBhop        = g_features.antiBhop.load() ? 1u : 0u;
-            shm->gamesense       = g_features.gamesense.load() ? 1u : 0u;
-            shm->rageAim         = g_features.rageAim.load() ? 1u : 0u;
-            shm->rageTarget      = static_cast<uint8_t>(g_features.rageTarget.load());
-            shm->hudVisible      = gui::g_hudVisible.load() ? 1u : 0u;
-            shm->menuOpen        = gui::g_menuOpen.load() ? 1u : 0u;
-            shm->inGameMenu      = gui::g_inGameMenuReady.load() ? 1u : 0u;
-            shm->unloadRequested = 0u;
-            shm->clientBase      = clientBase;
-            shm->entityList      = entityList;
-            shm->localPlayer     = localPlayer;
-            shm->localHealth     = health;
-            shm->localTeam       = localTeam;
-            shm->viewAnglesWritable = g_state.viewAnglesWritable.load() ? 1u : 0u;
-            shm->offsetsFromIni     = g_state.offsetsFromIni.load() ? 1u : 0u;
-
-            // Команды из меню оверлея (комбо реверс аима / кнопка выгрузки).
-            const uint32_t cmd = shm->cmdSeq;
-            if (cmd != lastAppliedCmd && shm->setMask != 0u) {
-                const uint32_t mask = shm->setMask;
-                const uint32_t val  = shm->setValues;
-                if (mask & (nwshared::kFbRaimOn | nwshared::kFbRaimV2)) {
-                    const int m = (val & nwshared::kFbRaimOn)
-                                      ? ((val & nwshared::kFbRaimV2) ? 2 : 1)
-                                      : 0;
-                    g_features.reverseAim.store(m);
-                }
-                if (mask & nwshared::kFbAntiAimless)
-                    g_features.antiAimless.store((val & nwshared::kFbAntiAimless) != 0);
-                if (mask & nwshared::kFbVisualRecoil)
-                    g_features.visualRecoil.store((val & nwshared::kFbVisualRecoil) != 0);
-                if (mask & nwshared::kFbAntiBhop)
-                    g_features.antiBhop.store((val & nwshared::kFbAntiBhop) != 0);
-                if (mask & nwshared::kFbGamesense)
-                    g_features.gamesense.store((val & nwshared::kFbGamesense) != 0);
-                if (mask & nwshared::kFbSpinSpeed) {
-                    // Значение скорости закодировано в bits 8..15 команды.
-                    const uint32_t s = (val >> 8) & 0xFFu;
-                    if (s <= 10)
-                        g_features.spinSpeed.store(static_cast<float>(s));
-                }
-                if (mask & (nwshared::kFbRageOn | nwshared::kFbRageTarget)) {
-                    g_features.rageAim.store((val & nwshared::kFbRageOn) != 0);
-                    g_features.rageTarget.store((val & nwshared::kFbRageTarget) ? 1 : 0);
-                }
-                if ((mask & nwshared::kFbUnload) && (val & nwshared::kFbUnload))
-                    gui::g_unloadRequested.store(true);
-
-                lastAppliedCmd = cmd;
-                shm->appliedSeq = cmd;
-            }
-
-            shm.Commit();
-        }
 
         // --- 1. Антибхоп: пока нажат пробел — снимаем FL_ONGROUND (бит 0). ---
         if (g_features.antiBhop.load() && (GetAsyncKeyState(VK_SPACE) & 0x8000)) {

@@ -121,7 +121,6 @@ m_bInReload=0x1814
 | F3 | visual recoil x4 |
 | F4 | антибхоп |
 | F5 | gamesense (дроп оружия) |
-| F6 | показать/скрыть HUD-оверлей |
 | END | выгрузка DLL |
 
 INSERT оставлен как запасной тоггл меню.
@@ -174,13 +173,7 @@ INSERT оставлен как запасной тоггл меню.
 
 ## Оверлей — запасной путь (Vulkan)
 
-`neverwin_overlay_vN.exe` (DirectX 12) остаётся на случай, если рендер-хук
-в игру не встал: Vulkan, не совпала сигнатура после патча Valve. Тогда DLL
-пишет `inGameMenu=0` в shared memory, и меню берёт на себя оверлей
-(`Local\neverwin_state_v5`), плюс он всегда показывает HUD со статусами.
-
-- Игра в оконном/borderless-режиме — поверх exclusive fullscreen внешнее окно не встанет.
-- F6 — скрыть/показать HUD оверлея. END — выгрузка DLL (оверлей сам закроется).
+Внешнего оверлея больше нет — меню живёт только в игре (свопчейн + MinHook).
 
 Если рендер-хук не встал на DX11 — `%TEMP%\neverwin.log` скажет, что именно:
 свопчейн, MinHook, InputSystem или WndProc.
@@ -218,7 +211,7 @@ cmake --build build
 1. Запусти CS2, дождись загрузки.
 2. `neverwin_injector.exe` — сам найдёт `cs2.exe` и `neverwin.dll` рядом с собой.
    (или `neverwin_injector.exe <PID> <путь\к\neverwin.dll>`)
-3. Запусти `neverwin_overlay_vN.exe` и инжектни DLL. В игре: P — меню, END — выгрузка.
+3. Инжектни DLL. В игре: P — меню, END — выгрузка.
 
 ## Если опять вылетит
 
@@ -233,16 +226,13 @@ neverwin-internal/
 ├── src/
 │   ├── main.cpp         — DllMain, главный поток, загрузка neverwin.ini, выгрузка
 │   ├── features.cpp     — все фичи + shared memory (снапшот и команды оверлея)
-│   ├── gui.cpp          — только флаги меню/HUD/выгрузки (хуков больше нет)
-│   ├── shared_state.hpp — протокол DLL <-> оверлей (named shared memory)
+│   ├── gui.cpp          — меню в игре (свопчейн, MinHook, RelMouse, WndProc)
 │   ├── offsets.hpp      — встроенные оффсеты (дефолты)
 │   ├── offsets.cpp      — чтение оффсетов из neverwin.ini
 │   ├── memory.hpp       — безопасные Read/Write
 │   ├── log.hpp          — лог в %TEMP%\neverwin.log
 │   ├── util.hpp         — UTF-16 → UTF-8
 │   └── pch.h            — общие инклуды
-├── overlay/
-│   └── overlay.cpp      — внешнее меню/HUD на DirectX 12 (ImGui + dx12)
 ├── injector/
 │   └── injector.cpp     — x64-инжектор с понятными ошибками
 ├── tools/

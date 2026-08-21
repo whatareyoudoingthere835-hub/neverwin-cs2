@@ -142,32 +142,10 @@ retry_on_cache "$ZIG" c++ -target x86_64-windows-gnu -O2 \
     -o "$WORK/neverwin_injector.exe" "$WORK/injector.o" "$WORK/bridge.o" \
     -luser32 -lkernel32 -lshell32
 
-# --- оверлей: меню + HUD на DirectX 12 (ImGui + imgui_impl_dx12) ---
-OVERLAY_SRCS=(
-    "$SRC/overlay/overlay.cpp"
-    "$SRC/thirdparty/imgui/imgui.cpp" "$SRC/thirdparty/imgui/imgui_draw.cpp"
-    "$SRC/thirdparty/imgui/imgui_tables.cpp" "$SRC/thirdparty/imgui/imgui_widgets.cpp"
-    "$SRC/thirdparty/imgui/backends/imgui_impl_win32.cpp"
-    "$SRC/thirdparty/imgui/backends/imgui_impl_dx12.cpp"
-)
-OOBJS=()
-i=0
-for src in "${OVERLAY_SRCS[@]}"; do
-    i=$((i + 1))
-    obj="$WORK/oobj_$i.o"
-    retry_on_cache "$ZIG" c++ "${COMMON[@]}" -c "$src" -o "$obj"
-    OOBJS+=("$obj")
-done
-retry_on_cache "$ZIG" c++ "${COMMON[@]}" -c "$WORK/wmain_bridge.cpp" -o "$WORK/bridge.o"
-retry_on_cache "$ZIG" c++ -target x86_64-windows-gnu -O2 \
-    -o "$WORK/neverwin_overlay.exe" "${OOBJS[@]}" "$WORK/bridge.o" \
-    -ld3d12 -ldxgi -ldwmapi -limm32 -luser32 -lgdi32 -lkernel32 -L"$WORK" -ld3dcompiler
-
 # --- раскладка по release/ ---
 mkdir -p "$OUT"
 cp "$WORK/neverwin.dll"          "$OUT/neverwin_v${V}.dll"
 cp "$WORK/neverwin_injector.exe" "$OUT/neverwin_injector_v${V}.exe"
-cp "$WORK/neverwin_overlay.exe"  "$OUT/neverwin_overlay_v${V}.exe"
 if [[ -f "$OUT/neverwin.ini" ]]; then
     echo "[i] neverwin.ini лежит рядом с DLL — оффсеты подхватятся."
 else
@@ -179,4 +157,3 @@ echo ""
 echo "Готово:"
 echo "  $OUT/neverwin_v${V}.dll"
 echo "  $OUT/neverwin_injector_v${V}.exe"
-echo "  $OUT/neverwin_overlay_v${V}.exe"

@@ -9,9 +9,6 @@ namespace gui {
     // Выгрузка: END или кнопка в меню. Снимается на рендер-потоке.
     extern std::atomic<bool> g_unloadRequested;
 
-    // F6 — показать/скрыть HUD-оверлей (читает сам оверлей из shared memory).
-    extern std::atomic<bool> g_hudVisible;
-
     // 1 = рендер-хук встал в игру, меню рисует сама DLL (quint-схема).
     // 0 = не встал (Vulkan / не нашли свопчейн) — меню отдаётся оверлею.
     extern std::atomic<bool> g_inGameMenuReady;

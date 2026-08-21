@@ -32,7 +32,6 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 namespace gui {
     std::atomic<bool> g_menuOpen{false};
     std::atomic<bool> g_unloadRequested{false};
-    std::atomic<bool> g_hudVisible{true};
     std::atomic<bool> g_inGameMenuReady{false};
 }
 
@@ -266,7 +265,7 @@ namespace {
                 if (ImGui::Button("Выгрузить DLL", ImVec2(-1, 0))) {
                     gui::g_unloadRequested.store(true);
                 }
-                ImGui::TextDisabled("v%d | P/INSERT - меню | F6 - HUD | END - выгрузка", NW_VERSION);
+                ImGui::TextDisabled("v%d | P/INSERT - меню | END - выгрузка", NW_VERSION);
 
                 ImGui::EndTabItem();
             }
