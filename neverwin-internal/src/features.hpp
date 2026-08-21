@@ -13,6 +13,13 @@ struct Features {
     std::atomic<bool> visualRecoil{false}; // F3 — отдача x4
     std::atomic<bool> antiBhop{false};     // F4 — сброс FL_ONGROUND при прыжке
     std::atomic<bool> gamesense{true};     // F5 — рандомный дроп оружия (20%)
+    // Nonagon ragebot (F6)
+    std::atomic<bool> ragebot{false};      // F6 — рейджбот с резолвером из nonagon
+    std::atomic<bool> resolver{true};      // резолвер вкл/выкл
+    std::atomic<bool> backtrack{true};     // бэктрек
+    std::atomic<int>  rageFov{180};        // фов рейджа
+    std::atomic<int>  rageHitchance{50};
+    std::atomic<int>  rageMinDamage{1};
 };
 
 // Снапшот состояния для отображения в меню (диагностика).
