@@ -18,23 +18,34 @@
 namespace {
 
 #if defined( DEV )
+	static HMODULE s_velocity_module = nullptr;
+	static FILE* s_log = nullptr;
+
 	void init_log( const char* msg )
 	{
 		OutputDebugStringA( "[velocity] " );
 		OutputDebugStringA( msg );
 		OutputDebugStringA( "\n" );
 
-		// Диагностика: DEV-сборка пишет инициализацию в velocity.log рядом
-		// с DLL — без этого видны только через DebugView.
-		static FILE* s_log = nullptr;
+		// Диагностика: DEV-сборка пишет инициализацию в velocity.log.
+		// Путь берётся из hModule (работает и при ручном маппинге, когда
+		// GetModuleHandleW на саму DLL даёт NULL); если путь получить не
+		// удалось — фолбэк в %TEMP%\velocity.log.
 		if ( !s_log ) {
 			wchar_t path [MAX_PATH] {};
-			GetModuleFileNameW( GetModuleHandleW( L"velocity.dll" ), path, MAX_PATH );
-			wchar_t* slash = wcsrchr( path, L'\\' );
-			if ( slash ) {
-				wcscpy( slash + 1, L"velocity.log" );
-				s_log = _wfopen( path, L"a" );
+			if ( s_velocity_module )
+				GetModuleFileNameW( s_velocity_module, path, MAX_PATH );
+
+			if ( path [0] && GetFileAttributesW( path ) != INVALID_FILE_ATTRIBUTES ) {
+				wchar_t* slash = wcsrchr( path, L'\\' );
+				if ( slash )
+					wcscpy( slash + 1, L"velocity.log" );
+			} else {
+				GetTempPathW( MAX_PATH, path );
+				wcscat( path, L"velocity.log" );
 			}
+
+			s_log = _wfopen( path, L"a" );
 		}
 		if ( s_log ) {
 			fprintf( s_log, "[velocity] %s\n", msg );
@@ -62,6 +73,10 @@ namespace {
 	DWORD WINAPI init_thread( LPVOID param )
 	{
 		const auto module_handle = static_cast<HMODULE>( param );
+#if defined( DEV )
+		s_velocity_module = module_handle;
+		init_log( "velocity init thread started" );
+#endif
 
 #if !defined( DEV )
 		// bool protection_result = false; g_protection.attach( &protection_result );
