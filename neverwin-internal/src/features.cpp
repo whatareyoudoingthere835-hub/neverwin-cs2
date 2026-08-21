@@ -220,6 +220,10 @@ namespace {
     // по этим числам видно, на каком шаге цепочка рвётся, если рвётся.
     struct TeamScanStats {
         int pawns = 0, enemies = 0, teammates = 0, withNode = 0, withOrigin = 0;
+        // Гистограмма: павнов и живых (hp>0) по значению команды.
+        // Индексы 0..3 = команды 0..3, индекс 4 = всё остальное.
+        int teamPawns[5] = {0, 0, 0, 0, 0};
+        int teamAlive[5] = {0, 0, 0, 0, 0};
     };
 
     bool FindTeammateTarget(uintptr_t localPlayer, uintptr_t entityList,
@@ -242,8 +246,13 @@ namespace {
 
             ++stats.pawns;
             const uint8_t team = ent::GetTeam(pawn);
+            const uint8_t tIdx = (team <= 3) ? team : 4;
+            ++stats.teamPawns[tIdx];
+            const int teamHp = mem::Read<int>(pawn + off.m_iHealth);
+            if (teamHp > 0 && teamHp <= 1000)
+                ++stats.teamAlive[tIdx];
             if (team != localTeam) {
-                if (team != 0 && mem::Read<int>(pawn + off.m_iHealth) > 0)
+                if (team != 0 && teamHp > 0)
                     ++stats.enemies;
                 return;
             }
@@ -492,10 +501,35 @@ void RunFeatureLoop() {
                 const uint32_t now = GetTickCount();
                 if (now - lastNone > 5000) {
                     lastNone = now;
-                    NW_LOG(L"raimv%d: живых тиммейтов нет. скан 512: павнов %d, врагов %d, тиммейтов %d (живых %d, нод %d, origin %d), localTeam=%d",
-                           raimMode, stats.pawns, stats.enemies, stats.teammates,
-                           aliveCount, stats.withNode, stats.withOrigin,
+                    NW_LOG(L"raimv%d: живых тиммейтов нет. скан 64 блоков: павнов %d, врагов %d, команды t0=%d/%d t1=%d/%d t2=%d/%d t3=%d/%d др=%d/%d (павнов/живых), local hp=%d ls=%d team=%d",
+                           raimMode, stats.pawns, stats.enemies,
+                           stats.teamPawns[0], stats.teamAlive[0],
+                           stats.teamPawns[1], stats.teamAlive[1],
+                           stats.teamPawns[2], stats.teamAlive[2],
+                           stats.teamPawns[3], stats.teamAlive[3],
+                           stats.teamPawns[4], stats.teamAlive[4],
+                           health, mem::Read<uint8_t>(localPlayer + off.m_lifeState),
                            static_cast<int>(localTeam));
+
+                    // test-режим: проверяем канал юзеркоманды даже без цели —
+                    // проба раскладки против живых viewAngles.
+                    if (raimMode == 3) {
+                        const uintptr_t controller =
+                            mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerController);
+                        const uintptr_t ctx = controller
+                            ? mem::Read<uintptr_t>(controller + off.m_CommandContext) : 0;
+                        if (!ctx) {
+                            NW_LOG(L"test: контроллер или m_CommandContext не читаются");
+                        } else if (Raimv2ResolveLayout(ctx, mem::Read<float>(viewAnglesPtr),
+                                                       mem::Read<float>(viewAnglesPtr + 4))) {
+                            NW_LOG(L"test: раскладка user cmd найдена: ring=0x%X seq=0x%X pb=0x%X base=0x%X msg=0x%X ang=0x%X",
+                                   g_cmdLayout.ringBase, g_cmdLayout.seqOff, g_cmdLayout.pbOff,
+                                   g_cmdLayout.baseOff, g_cmdLayout.msgOff, g_cmdLayout.angOff);
+                        } else {
+                            NW_LOG(L"test: проба не сошлась, best %.1f° — раскладки из кандидатов нет",
+                                   g_lastProbeScore);
+                        }
+                    }
                 }
             }
         }
