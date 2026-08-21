@@ -361,6 +361,7 @@ void RunFeatureLoop() {
         if (shm) {
             shm->reverseAim       = static_cast<uint8_t>(g_features.reverseAim.load());
             shm->antiAimless     = g_features.antiAimless.load() ? 1u : 0u;
+            shm->spinSpeed       = static_cast<uint8_t>(g_features.spinSpeed.load() + 0.5f);
             shm->visualRecoil    = g_features.visualRecoil.load() ? 1u : 0u;
             shm->antiBhop        = g_features.antiBhop.load() ? 1u : 0u;
             shm->gamesense       = g_features.gamesense.load() ? 1u : 0u;
@@ -395,6 +396,12 @@ void RunFeatureLoop() {
                     g_features.antiBhop.store((val & nwshared::kFbAntiBhop) != 0);
                 if (mask & nwshared::kFbGamesense)
                     g_features.gamesense.store((val & nwshared::kFbGamesense) != 0);
+                if (mask & nwshared::kFbSpinSpeed) {
+                    // Значение скорости закодировано в bits 8..15 команды.
+                    const uint32_t s = (val >> 8) & 0xFFu;
+                    if (s <= 10)
+                        g_features.spinSpeed.store(static_cast<float>(s));
+                }
                 if ((mask & nwshared::kFbUnload) && (val & nwshared::kFbUnload))
                     gui::g_unloadRequested.store(true);
 
@@ -558,8 +565,13 @@ void RunFeatureLoop() {
             }
 
             if (enemySpotted) {
+                const float spin = g_features.spinSpeed.load();
                 const float curYaw = mem::Read<float>(viewAnglesPtr + 4);
-                float newYaw = curYaw + 15.0f;
+                float newYaw = curYaw;
+                // 0 — без кручения (только взгляд в пол), 1 — как раньше,
+                // 10 — в десять раз быстрее.
+                if (spin > 0.0f)
+                    newYaw = curYaw + 15.0f * spin;
                 if (newYaw > 180.0f) newYaw -= 360.0f;
                 if (newYaw < -180.0f) newYaw += 360.0f;
                 mem::Write<float>(viewAnglesPtr, 89.0f);
@@ -567,7 +579,7 @@ void RunFeatureLoop() {
 
                 static bool logged = false;
                 if (!logged) {
-                    NW_LOG(L"F2: враг виден — камера в пол + кручение.");
+                    NW_LOG(L"F2: враг виден — камера в пол + кручение (скорость x%.0f).", spin);
                     logged = true;
                 }
             }

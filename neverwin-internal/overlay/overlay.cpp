@@ -70,6 +70,7 @@ namespace {
     struct MenuMirror {
         int      raim = 0; // 0=off, 1=raimv1, 2=raimv2
         bool     al = false, vr = false, ab = false, gs = false;
+        float    spin = 1.0f;
         uint32_t pendingCmd = 0;
         bool     dirty = false;
     } g_m;
@@ -270,12 +271,18 @@ namespace {
 
         const char* raimName =
             st.reverseAim == 2 ? "raimv2" : st.reverseAim == 1 ? "raimv1" : "OFF";
+        char spinBuf[16]{};
+        if (st.antiAimless)
+            snprintf(spinBuf, sizeof(spinBuf), "x%.0f",
+                     static_cast<float>(st.spinSpeed > 10 ? 1 : st.spinSpeed));
+        else
+            snprintf(spinBuf, sizeof(spinBuf), "OFF");
         const struct { const char* name; const char* val; bool on; } rows[] = {
             { "[F1] Реверс аим: наводка на тимейтов", raimName, st.reverseAim != 0 },
-            { "[F2] Антиаимлесс: взгляд в пол",       "ON",    st.antiAimless != 0 },
-            { "[F3] Visual recoil x4",                "ON",    st.visualRecoil != 0 },
-            { "[F4] Антибхоп",                        "ON",    st.antiBhop != 0 },
-            { "[F5] Gamesense: дроп оружия",          "ON",    st.gamesense != 0 },
+            { "[F2] Антиаимлесс: взгляд в пол",       spinBuf,  st.antiAimless != 0 },
+            { "[F3] Visual recoil x4",                "ON",     st.visualRecoil != 0 },
+            { "[F4] Антибхоп",                        "ON",     st.antiBhop != 0 },
+            { "[F5] Gamesense: дроп оружия",          "ON",     st.gamesense != 0 },
         };
         for (const auto& r : rows) {
             ImGui::Text("%s", r.name);
@@ -326,6 +333,12 @@ namespace {
                 g_m.pendingCmd = viewer.SendCommand(bit, mirror ? bit : 0);
         };
         checkbox("Антиаимлесс: взгляд в пол [F2]",          nwshared::kFbAntiAimless,  g_m.al);
+        if (ImGui::SliderFloat("Скорость спинбота (0-10)", &g_m.spin, 0.0f, 10.0f, "x%.0f")) {
+            // Значение скорости — в bits 8..15 команды.
+            const uint32_t val = nwshared::kFbSpinSpeed |
+                                 ((static_cast<uint32_t>(g_m.spin + 0.5f) & 0xFFu) << 8);
+            g_m.pendingCmd = viewer.SendCommand(nwshared::kFbSpinSpeed, val);
+        }
         checkbox("Visual recoil x4 [F3]",                   nwshared::kFbVisualRecoil, g_m.vr);
         checkbox("Антибхоп [F4]",                           nwshared::kFbAntiBhop,     g_m.ab);
         checkbox("Gamesense: дроп оружия [F5]",             nwshared::kFbGamesense,    g_m.gs);
@@ -370,6 +383,7 @@ namespace {
             return;
         g_m.raim = st.reverseAim > 2 ? 0 : static_cast<int>(st.reverseAim);
         g_m.al = st.antiAimless != 0;
+        g_m.spin = static_cast<float>(st.spinSpeed > 10 ? 1 : st.spinSpeed);
         g_m.vr = st.visualRecoil != 0;
         g_m.ab = st.antiBhop != 0;
         g_m.gs = st.gamesense != 0;

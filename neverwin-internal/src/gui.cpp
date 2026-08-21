@@ -226,6 +226,10 @@ namespace {
         if (ImGui::Checkbox("Антиаимлесс: взгляд в пол [F2]", &v))
             g_features.antiAimless.store(v);
 
+        float spin = g_features.spinSpeed.load();
+        if (ImGui::SliderFloat("Скорость спинбота (0-10)", &spin, 0.0f, 10.0f, "x%.0f"))
+            g_features.spinSpeed.store(spin);
+
         v = g_features.visualRecoil.load();
         if (ImGui::Checkbox("Visual recoil x4 [F3]", &v))
             g_features.visualRecoil.store(v);

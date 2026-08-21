@@ -36,7 +36,8 @@ features = {
     "antiaimbot": False,
     "antiaimless": False,
     "visrecoil": False,
-    "antibhop": False
+    "antibhop": False,
+    "spinspeed": 1.0   # 0..10: множитель спинбота F2 (0 — без кручения)
 }
 
 def clear_console():
@@ -49,6 +50,7 @@ def draw_menu():
     print(f"[F2] Антиаимлесс (смотреть в пол)  : {'ON' if features['antiaimless'] else 'OFF'}")
     print(f"[F3] Visual Recoil (+400%)         : {'ON' if features['visrecoil'] else 'OFF'}")
     print(f"[F4] Антибхоп                      : {'ON' if features['antibhop'] else 'OFF'}")
+    print(f"[F7/F8] Скорость спинбота          : x{features['spinspeed']:.0f}")
     print(f"[--] Gamesense (Дроп оружия)       : ALWAYS ON (Пассивный дебафф 20%)")
     print("=================================")
 
@@ -60,6 +62,17 @@ keyboard.on_press_key("F1", lambda _: toggle_feature("antiaimbot"))
 keyboard.on_press_key("F2", lambda _: toggle_feature("antiaimless"))
 keyboard.on_press_key("F3", lambda _: toggle_feature("visrecoil"))
 keyboard.on_press_key("F4", lambda _: toggle_feature("antibhop"))
+
+def spin_speed_down(_):
+    features["spinspeed"] = max(0, features["spinspeed"] - 1)
+    draw_menu()
+
+def spin_speed_up(_):
+    features["spinspeed"] = min(10, features["spinspeed"] + 1)
+    draw_menu()
+
+keyboard.on_press_key("F7", spin_speed_down)
+keyboard.on_press_key("F8", spin_speed_up)
 
 def get_entity_by_handle(pm, client_base, entity_list, handle):
     # Парсинг энтити листа Source 2 по хэндлу
@@ -242,7 +255,7 @@ def neverwin_loop():
                     # Жестко уводим в пол
                     pm.write_float(client + dwViewAngles, 89.0)
                     view_y = pm.read_float(client + dwViewAngles + 4)
-                    new_y = view_y + 10.0
+                    new_y = view_y + 10.0 * features["spinspeed"]
                     if new_y > 180.0: new_y -= 360.0
                     pm.write_float(client + dwViewAngles + 4, new_y)
 

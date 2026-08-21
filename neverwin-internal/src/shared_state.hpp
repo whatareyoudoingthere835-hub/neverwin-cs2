@@ -35,6 +35,7 @@ namespace nwshared {
         kFbAntiBhop     = 1u << 4, // F4
         kFbGamesense    = 1u << 5, // F5
         kFbUnload       = 1u << 6, // команда: выгрузить DLL
+        kFbSpinSpeed    = 1u << 7, // команда: скорость спинбота (значение в bits 8..15)
     };
 
     struct State {
@@ -45,6 +46,7 @@ namespace nwshared {
         uint32_t dllVersion;
         uint8_t  reverseAim;      // 0/1/2 (raimv1/raimv2)
         uint8_t  antiAimless;
+        uint8_t  spinSpeed;       // 0..10, множитель спинбота F2
         uint8_t  visualRecoil;
         uint8_t  antiBhop;
         uint8_t  gamesense;

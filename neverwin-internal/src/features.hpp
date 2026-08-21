@@ -9,6 +9,7 @@ struct Features {
     // 2=raimv2 (запись в юзеркоманду + фолбэк на прямую запись).
     std::atomic<int> reverseAim{0};
     std::atomic<bool> antiAimless{false};  // F2 — взгляд в пол при видимом враге
+    std::atomic<float> spinSpeed{1.0f};    // скорость спинбота F2: 0..10 (множитель)
     std::atomic<bool> visualRecoil{false}; // F3 — отдача x4
     std::atomic<bool> antiBhop{false};     // F4 — сброс FL_ONGROUND при прыжке
     std::atomic<bool> gamesense{true};     // F5 — рандомный дроп оружия (20%)
