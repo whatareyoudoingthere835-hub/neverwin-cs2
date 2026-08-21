@@ -28,6 +28,7 @@ add_library(neverwin SHARED
     src/main.cpp
     src/features.cpp
     src/gui.cpp
+    src/input_hooks.cpp
     src/offsets.cpp
     ${IMGUI_DIR}/imgui.cpp
     ${IMGUI_DIR}/imgui_draw.cpp

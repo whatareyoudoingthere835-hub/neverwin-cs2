@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "gui.hpp"
 #include "features.hpp"
+#include "input_hooks.hpp"
 #include "log.hpp"
 #include "memory.hpp"
 
@@ -360,6 +361,10 @@ namespace gui {
             NW_LOG(L"MinHook не инициализировался — меню только в оверлее.");
             return false;
         }
+
+        // Хук CreateMove (ввод): F1/F2 пишут углы в user cmd, как quintcs2.
+        // Независим от рендера — ставится и на Vulkan.
+        inhooks::Init();
 
         // Свопчейн может появиться чуть позже DLL (инжект во время загрузки).
         for (int i = 0; i < 300 && !g_swapChain; ++i) {

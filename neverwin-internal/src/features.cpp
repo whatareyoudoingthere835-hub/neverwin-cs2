@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "features.hpp"
+#include "entities.hpp"
 #include "gui.hpp"
 #include "log.hpp"
 #include "memory.hpp"
@@ -19,43 +20,6 @@ namespace {
     const auto& off = offsets::g;
 
     struct Vector2 { float x = 0.0f; float y = 0.0f; };
-    struct Vector3 { float x = 0.0f; float y = 0.0f; float z = 0.0f; };
-
-    inline Vector3 operator+(const Vector3& a, const Vector3& b) {
-        return { a.x + b.x, a.y + b.y, a.z + b.z };
-    }
-
-    constexpr float kRadToDeg = 57.29577951308232f;
-
-    // Глаза локального игрока: abs origin из сцена-ноды + view offset.
-    // m_vecViewOffset теперь поле C_BaseModelEntity — читается прямо из павна,
-    // без второго указателя. Если сцена-нода не прочиталась (стух оффсет) —
-    // вернёт нули, и аимбот в этот тик просто не сработает.
-    Vector3 GetEyePosition(uintptr_t localPlayer) {
-        Vector3 origin{};
-        const uintptr_t sceneNode = mem::Read<uintptr_t>(localPlayer + off.m_pGameSceneNode);
-        if (sceneNode)
-            origin = mem::Read<Vector3>(sceneNode + off.m_vecAbsOrigin);
-
-        const Vector3 viewOffset = mem::Read<Vector3>(localPlayer + off.m_vecViewOffset);
-        return origin + viewOffset;
-    }
-
-    // Углы из точки A в точку B. Конвенция Source: pitch вверх отрицательный,
-    // yaw из atan2 уже лежит в [-180, 180].
-    Vector2 CalcAngles(const Vector3& from, const Vector3& to) {
-        const float dx = to.x - from.x;
-        const float dy = to.y - from.y;
-        const float dz = to.z - from.z;
-        // Минимум 1 юнит горизонтали — atan2 не увидит NaN, когда тиммейт
-        // стоит ровно на тебе (или на той же XY-точке).
-        const float dist2d = std::fmaxf(std::sqrtf(dx * dx + dy * dy), 1.0f);
-
-        Vector2 angles{};
-        angles.x = std::atan2f(-dz, dist2d) * kRadToDeg;
-        angles.y = std::atan2f(dy, dx) * kRadToDeg;
-        return angles;
-    }
 
     // --- Хоткеи. Маппинг соответствует оригинальному internal.txt. ---
     void HandleHotkeys() {
@@ -79,29 +43,7 @@ namespace {
         if (GetAsyncKeyState(VK_END) & 1) gui::g_unloadRequested.store(true);
     }
 
-    // --- Энтити-лист Source 2: список списков. ---
-    // listEntry = entityList + 0x10 + 8 * (index >> 9)
-    // element   = listEntry  + 0x78 * (index & 0x1FF)
-    //
-    // В оригинале формула для цикла врагов была перепутана:
-    // ((8 * (i & 0x7FFF)) >> 9) + 16 == 16 + (i >> 6), тогда как правильно
-    // 0x10 + 8 * (i >> 9). При (i & 0x1FF) >= 64 читался чужой listEntry,
-    // и любой мусорный pawn дальше ронял процесс.
-    uintptr_t GetEntityByHandle(uintptr_t entityList, uint32_t handle) {
-        const uint32_t index = handle & 0x7FFF;
-        const uintptr_t listEntry =
-            mem::Read<uintptr_t>(entityList + off.listEntryOffset + 8ull * (index >> 9));
-        if (!listEntry)
-            return 0;
-        return mem::Read<uintptr_t>(listEntry + off.entryStride * (index & 0x1FF));
-    }
-
-    void NormalizeAngles(float& pitch, float& yaw) {
-        if (pitch > 89.0f) pitch = 89.0f;
-        if (pitch < -89.0f) pitch = -89.0f;
-        while (yaw > 180.0f) yaw -= 360.0f;
-        while (yaw < -180.0f) yaw += 360.0f;
-    }
+    // --- Энтити-лист и углы — в entities.hpp (общие с хуком CreateMove). ---
 
     // Нажатие 'G' (дроп оружия). keybd_event из оригинала заменён на SendInput.
     void PressDropKey() {
@@ -244,7 +186,7 @@ void RunFeatureLoop() {
             if (weaponServices) {
                 const uint32_t weaponHandle = mem::Read<uint32_t>(weaponServices + off.m_hActiveWeapon);
                 if (weaponHandle) {
-                    const uintptr_t weapon = GetEntityByHandle(entityList, weaponHandle);
+                    const uintptr_t weapon = ent::GetEntityByHandle(entityList, weaponHandle);
                     if (weapon) {
                         const int  currentAmmo = mem::Read<int>(weapon + off.m_iClip1);
                         const bool isReloading = mem::Read<uint8_t>(weapon + off.m_bInReload) != 0;
@@ -274,7 +216,7 @@ void RunFeatureLoop() {
             Vector2 view = mem::Read<Vector2>(viewAnglesPtr);
             view.x -= (newPunch.x - oldPunch.x);
             view.y -= (newPunch.y - oldPunch.y);
-            NormalizeAngles(view.x, view.y);
+            ent::NormalizeAngles(view.x, view.y);
 
             if (mem::Write<Vector2>(viewAnglesPtr, view)) {
                 oldPunch = newPunch;
@@ -294,75 +236,9 @@ void RunFeatureLoop() {
             oldPunch = {};
         }
 
-        // --- 4a. Реверс аимбот (F1): наводка на ближайшего живого тиммейта. ---
-        // Тряски больше нет: каждый тик считаем углы до тиммейта и пишем их
-        // во viewAngles. Детерминированно, без рандома.
-        if (g_features.antiAimbot.load()) {
-            const Vector3 eye = GetEyePosition(localPlayer);
-            if (eye.x != 0.0f || eye.y != 0.0f || eye.z != 0.0f) {
-                uintptr_t bestPawn = 0;
-                Vector3   bestOrigin{};
-                float     bestDist2 = FLT_MAX;
-
-                for (uint32_t i = 1; i < 64; ++i) {
-                    const uintptr_t pawn = GetEntityByHandle(entityList, i);
-                    if (!pawn || pawn == localPlayer)
-                        continue;
-                    if (mem::Read<int>(pawn + off.m_iHealth) <= 0)
-                        continue;
-                    if (mem::Read<int>(pawn + off.m_iTeamNum) != localTeam)
-                        continue;
-
-                    const uintptr_t sceneNode = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
-                    if (!sceneNode)
-                        continue;
-                    const Vector3 origin = mem::Read<Vector3>(sceneNode + off.m_vecAbsOrigin);
-
-                    const float dx = origin.x - eye.x;
-                    const float dy = origin.y - eye.y;
-                    const float dz = origin.z - eye.z;
-                    const float dist2 = dx * dx + dy * dy + dz * dz;
-                    if (dist2 < bestDist2) {
-                        bestDist2 = dist2;
-                        bestPawn = pawn;
-                        bestOrigin = origin;
-                    }
-                }
-
-                if (bestPawn) {
-                    // +64 юнита вверх от origin — корпус/голова. Бон-матрицу
-                    // не дёргаем: там свой оффсет на каждый патч.
-                    const Vector3 target{ bestOrigin.x, bestOrigin.y, bestOrigin.z + 64.0f };
-                    Vector2 angles = CalcAngles(eye, target);
-                    NormalizeAngles(angles.x, angles.y);
-                    mem::Write<Vector2>(viewAnglesPtr, angles);
-                }
-            }
-        }
-
-        // --- 4b. Антиаимлесс (F2): виден враг — взгляд в пол. ---
-        if (g_features.antiAimless.load()) {
-            bool enemySpotted = false;
-            for (uint32_t i = 1; i < 64; ++i) {
-                const uintptr_t pawn = GetEntityByHandle(entityList, i);
-                if (!pawn || pawn == localPlayer)
-                    continue;
-
-                const int enemyHealth = mem::Read<int>(pawn + off.m_iHealth);
-                const int enemyTeam   = mem::Read<int>(pawn + off.m_iTeamNum);
-                if (enemyHealth > 0 && enemyTeam != localTeam) {
-                    enemySpotted = true;
-                    break;
-                }
-            }
-
-            if (enemySpotted) {
-                Vector2 view = mem::Read<Vector2>(viewAnglesPtr);
-                view.x = 89.0f;
-                view.y += 15.0f;
-                NormalizeAngles(view.x, view.y);
-                mem::Write<Vector2>(viewAnglesPtr, view);
-            }
-        }
+        // --- 4. F1/F2 (углы) — теперь в input_hooks.cpp, в хуке CreateMove. ---
+        // Писать dwViewAngles из фонового потока бесполезно: CS2 каждый тик
+        // перезаписывает их из юзеркоманды. Канал тот же, что у quintcs2:
+        // углы в текущий user cmd внутри CSGOInput::CreateMove.
     }
 }

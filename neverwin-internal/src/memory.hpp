@@ -41,14 +41,15 @@ namespace mem {
 
     // Безопасная запись. Если регион read-only (например, секция с viewAngles) —
     // делает его writable. Повторный VirtualProtect для того же адреса
-    // не выполняется (кэш последнего региона).
+    // не выполняется (кэш последнего региона). Кэш thread_local: теперь
+    // пишут ДВА потока (цикл фич и хук CreateMove) — общий кэш был бы гонкой.
     template <typename T>
     inline bool Write(uintptr_t addr, const T& value) {
         if (!IsValidPtr(reinterpret_cast<void*>(addr), sizeof(T)))
             return false;
 
-        static uintptr_t s_lastAddr = 0;
-        static size_t    s_lastSize = 0;
+        static thread_local uintptr_t s_lastAddr = 0;
+        static thread_local size_t    s_lastSize = 0;
         if (s_lastAddr != addr || s_lastSize != sizeof(T)) {
             DWORD oldProtect = 0;
             if (!VirtualProtect(reinterpret_cast<void*>(addr), sizeof(T), PAGE_READWRITE, &oldProtect))

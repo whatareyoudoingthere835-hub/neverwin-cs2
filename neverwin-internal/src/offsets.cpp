@@ -41,6 +41,8 @@ namespace offsets {
         o.dwEntityList      = ReadHex(L"dwEntityList",      o.dwEntityList);
         o.dwLocalPlayerPawn = ReadHex(L"dwLocalPlayerPawn", o.dwLocalPlayerPawn);
         o.dwViewAngles      = ReadHex(L"dwViewAngles",      o.dwViewAngles);
+        o.dwCSGOInput       = ReadHex(L"dwCSGOInput",       o.dwCSGOInput);
+        o.dwLocalPlayerController = ReadHex(L"dwLocalPlayerController", o.dwLocalPlayerController);
         o.m_iHealth         = ReadHex(L"m_iHealth",         o.m_iHealth);
         o.m_iTeamNum        = ReadHex(L"m_iTeamNum",        o.m_iTeamNum);
         o.m_fFlags          = ReadHex(L"m_fFlags",          o.m_fFlags);
