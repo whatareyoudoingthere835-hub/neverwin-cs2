@@ -23,6 +23,23 @@ namespace {
 		OutputDebugStringA( "[velocity] " );
 		OutputDebugStringA( msg );
 		OutputDebugStringA( "\n" );
+
+		// Диагностика: DEV-сборка пишет инициализацию в velocity.log рядом
+		// с DLL — без этого видны только через DebugView.
+		static FILE* s_log = nullptr;
+		if ( !s_log ) {
+			wchar_t path [MAX_PATH] {};
+			GetModuleFileNameW( GetModuleHandleW( L"velocity.dll" ), path, MAX_PATH );
+			wchar_t* slash = wcsrchr( path, L'\\' );
+			if ( slash ) {
+				wcscpy( slash + 1, L"velocity.log" );
+				s_log = _wfopen( path, L"a" );
+			}
+		}
+		if ( s_log ) {
+			fprintf( s_log, "[velocity] %s\n", msg );
+			fflush( s_log );
+		}
 	}
 
 	#define INIT_FAIL( msg ) \

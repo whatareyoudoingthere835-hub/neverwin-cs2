@@ -328,6 +328,22 @@ namespace memory {
 			return 0;
 		}
 
+		// Форма "module.dll:0xHEX" — прямой оффсет в модуле (без скана).
+		// Используется для глобалов из свежего дампа: быстрее и не зависит
+		// от сигнатур. "0xHEX" — адрес слота, "*0xHEX" — значение по слоту.
+		if (pattern_str.size () > 2 && (pattern_str [0] == '0' && (pattern_str [1] == 'x' || pattern_str [1] == 'X'))) {
+			char* end = nullptr;
+			const auto off = std::strtoull (pattern_str.data () + 2, &end, 16);
+			const auto result = module_base + static_cast<std::uintptr_t> (off);
+			logging::console::print (xs ("[ok] offset resolved | {} -> 0x{:X}"), pattern, result);
+			return result;
+		}
+		if (pattern_str.size () > 3 && pattern_str [0] == '*' && pattern_str [1] == '0' && (pattern_str [2] == 'x' || pattern_str [2] == 'X')) {
+			char* end = nullptr;
+			const auto off = std::strtoull (pattern_str.data () + 3, &end, 16);
+			return memory::read<std::uintptr_t> (module_base + static_cast<std::uintptr_t> (off));
+		}
+
 		// rest of function unchanged, just swap pattern -> pattern_str and module_base is now local
 		const auto module_size = get_module_size (module_base);
 		if (!module_size) {
