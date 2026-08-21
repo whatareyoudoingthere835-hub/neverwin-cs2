@@ -22,6 +22,7 @@ namespace offsets {
 
         // --- C_BaseEntity (и все наследники) ---
         std::uintptr_t m_iHealth         = 0x34C;
+        std::uintptr_t m_lifeState       = 0x354;  // 0=жив, 1=умирает, 2=мёртв
         std::uintptr_t m_iTeamNum        = 0x3E7;
         std::uintptr_t m_fFlags          = 0x3F4;  // бит 0 = FL_ONGROUND
         std::uintptr_t m_pGameSceneNode  = 0x330;  // C_BaseEntity → CGameSceneNode*

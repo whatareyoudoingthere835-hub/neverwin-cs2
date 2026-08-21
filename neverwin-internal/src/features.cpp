@@ -220,13 +220,14 @@ namespace {
 
     bool FindTeammateTarget(uintptr_t localPlayer, uintptr_t entityList,
                             uint8_t localTeam, ent::Vector3& outOrigin,
-                            int& outHealth,
+                            int& outHealth, uint8_t& outLifeState,
                             int& aliveCount, int& totalCount,
                             TeamScanStats& stats) {
         uintptr_t bestAlive = 0, bestAny = 0;
         ent::Vector3 aliveOrigin{}, anyOrigin{};
         float aliveDist2 = FLT_MAX, anyDist2 = FLT_MAX;
         int aliveHealth = 0, anyHealth = 0;
+        uint8_t aliveLife = 0, anyLife = 0;
 
         const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
 
@@ -254,13 +255,19 @@ namespace {
                 continue;
             ++stats.withOrigin;
 
-            ++totalCount;
             const float dx = origin.x - eye.x;
             const float dy = origin.y - eye.y;
             const float dz = origin.z - eye.z;
             const float d2 = dx * dx + dy * dy + dz * dz;
 
-            const bool alive = mem::Read<int>(pawn + off.m_iHealth) > 0;
+            // Цель ближе 64 юнитов (свой труп под камерой смерти, тиммейт
+            // вплотную) даёт почти вертикальные углы — пропускаем.
+            if (d2 < 64.0f * 64.0f)
+                continue;
+
+            ++totalCount;
+            const uint8_t life = mem::Read<uint8_t>(pawn + off.m_lifeState);
+            const bool alive = life == 0 && mem::Read<int>(pawn + off.m_iHealth) > 0;
             if (alive) {
                 ++aliveCount;
                 if (d2 < aliveDist2) {
@@ -268,6 +275,7 @@ namespace {
                     bestAlive = pawn;
                     aliveOrigin = origin;
                     aliveHealth = mem::Read<int>(pawn + off.m_iHealth);
+                    aliveLife = life;
                 }
             }
             if (d2 < anyDist2) {
@@ -275,17 +283,20 @@ namespace {
                 bestAny = pawn;
                 anyOrigin = origin;
                 anyHealth = mem::Read<int>(pawn + off.m_iHealth);
+                anyLife = life;
             }
         }
 
         if (bestAlive) {
             outOrigin = aliveOrigin;
             outHealth = aliveHealth;
+            outLifeState = aliveLife;
             return true;
         }
         if (bestAny) {
             outOrigin = anyOrigin;
             outHealth = anyHealth;
+            outLifeState = anyLife;
             return true;
         }
         return false;
@@ -353,6 +364,12 @@ void RunFeatureLoop() {
         const int health = mem::Read<int>(localPlayer + off.m_iHealth);
         g_state.localHealth.store(health);
         if (health <= 0)
+            continue;
+
+        // Мёртвый/умирающий локальный: его труп остаётся в списке прямо под
+        // камерой смерти — raim наводился на него и уводил прицел в зенит.
+        // Пока локальный не жив (lifeState != 0) — фичи углов молчат.
+        if (mem::Read<uint8_t>(localPlayer + off.m_lifeState) != 0)
             continue;
 
         const uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
@@ -491,10 +508,11 @@ void RunFeatureLoop() {
         if (raimMode != 0) {
             ent::Vector3 targetOrigin{};
             int targetHealth = 0;
+            uint8_t targetLife = 0;
             int aliveCount = 0, totalCount = 0;
             TeamScanStats stats;
             if (FindTeammateTarget(localPlayer, entityList, localTeam,
-                                   targetOrigin, targetHealth,
+                                   targetOrigin, targetHealth, targetLife,
                                    aliveCount, totalCount, stats)) {
                 const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
                 if (eye.x != 0.0f || eye.y != 0.0f || eye.z != 0.0f) {
@@ -528,10 +546,10 @@ void RunFeatureLoop() {
                     const uint32_t now = GetTickCount();
                     if (now - lastLog > 5000) {
                         lastLog = now;
-                        NW_LOG(L"raimv%d: тиммейтов %d (живых %d), цель (%.0f %.0f %.0f) hp=%d, eye (%.0f %.0f %.0f), углы (%.1f, %.1f)%s",
+                        NW_LOG(L"raimv%d: тиммейтов %d (живых %d), цель (%.0f %.0f %.0f) hp=%d ls=%d, eye (%.0f %.0f %.0f), углы (%.1f, %.1f)%s",
                                raimMode, totalCount, aliveCount,
                                targetOrigin.x, targetOrigin.y, targetOrigin.z,
-                               targetHealth,
+                               targetHealth, static_cast<int>(targetLife),
                                eye.x, eye.y, eye.z,
                                angles.x, angles.y,
                                raimMode == 2 ? (viaCmd ? L" — канал user cmd" : L" — канал viewAngles") : L"");

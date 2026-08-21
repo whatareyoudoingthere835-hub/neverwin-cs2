@@ -31,7 +31,7 @@ NET_KEYS = ("dwEntityList", "dwLocalPlayerPawn", "dwViewAngles",
 # pawn наследует всю цепочку, поэтому класс-владелец поля не важен для чтения
 # pawn + offset, важно не перепутать само значение.
 CLASS_KEYS = {
-    "C_BaseEntity":           ("m_iHealth", "m_iTeamNum", "m_fFlags", "m_pGameSceneNode"),
+    "C_BaseEntity":           ("m_iHealth", "m_lifeState", "m_iTeamNum", "m_fFlags", "m_pGameSceneNode"),
     "C_BaseModelEntity":      ("m_vecViewOffset",),
     "CGameSceneNode":         ("m_vecAbsOrigin",),
     "C_BasePlayerPawn":       ("m_pCameraServices", "m_pWeaponServices"),

@@ -15,6 +15,7 @@ dwViewAngles = 0x23C01A8
 
 # --- Оффсеты схем ---
 m_iHealth = 0x34C
+m_lifeState = 0x354   # 0=жив, 1=умирает, 2=мёртв
 m_iTeamNum = 0x3E7
 m_fFlags = 0x3F4
 m_iClip1 = 0x1700
@@ -106,6 +107,9 @@ def neverwin_loop():
                 
             local_health = pm.read_int(local_player + m_iHealth)
             if local_health <= 0:
+                continue
+            # Мёртвый локальный: труп под камерой смерти — цель в зенит.
+            if pm.read_uint(local_player + m_lifeState) & 0xFF:
                 continue
 
             local_team = pm.read_uint(local_player + m_iTeamNum) & 0xFF  # uint8!
@@ -219,7 +223,12 @@ def neverwin_loop():
                         dz = origin[2] - eye[2]
                         dist2 = dx * dx + dy * dy + dz * dz
 
-                        if pm.read_int(pawn + m_iHealth) > 0 and dist2 < best_alive_dist:
+                        # Свой труп под ногами (<64) — вертикальные углы, пропускаем.
+                        if dist2 < 64.0 * 64.0:
+                            continue
+
+                        life = pm.read_uint(pawn + m_lifeState) & 0xFF
+                        if life == 0 and pm.read_int(pawn + m_iHealth) > 0 and dist2 < best_alive_dist:
                             best_alive_dist = dist2
                             best_alive = origin
                         if dist2 < best_any_dist:

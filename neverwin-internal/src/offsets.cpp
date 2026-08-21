@@ -43,6 +43,7 @@ namespace offsets {
         o.dwViewAngles      = ReadHex(L"dwViewAngles",      o.dwViewAngles);
         o.dwLocalPlayerController = ReadHex(L"dwLocalPlayerController", o.dwLocalPlayerController);
         o.m_iHealth         = ReadHex(L"m_iHealth",         o.m_iHealth);
+        o.m_lifeState       = ReadHex(L"m_lifeState",       o.m_lifeState);
         o.m_iTeamNum        = ReadHex(L"m_iTeamNum",        o.m_iTeamNum);
         o.m_fFlags          = ReadHex(L"m_fFlags",          o.m_fFlags);
         o.m_pGameSceneNode  = ReadHex(L"m_pGameSceneNode",  o.m_pGameSceneNode);
