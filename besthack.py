@@ -235,7 +235,9 @@ def neverwin_loop():
                             best_any_dist = dist2
                             best_any = origin
 
-                    best_origin = best_alive if best_alive is not None else best_any
+                    # Цель — только ЖИВОЙ тиммейт (hp > 0). Трупы не берём:
+                    # прицел вёл на мертвецов, когда живых не было.
+                    best_origin = best_alive
 
                     if best_origin:
                         dx = best_origin[0] - eye[0]

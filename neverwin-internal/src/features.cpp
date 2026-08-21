@@ -205,8 +205,9 @@ namespace {
         return true;
     }
 
-    // Цель реверс аима: ближайший тиммейт. Живой предпочтительнее трупа,
-    // стены и дальность не проверяются — наводимся всегда, если есть на кого.
+    // Цель реверс аима: ближайший ЖИВОЙ тиммейт. Трупы не берутся вообще —
+    // фолбэк «целиться в труп» убран: прицел вёл на мертвецов, когда живых
+    // не было. Стены и дальность не проверяются.
     //
     // Скан по 512 хэндлам: игроки обычно в начале списка, но широкий скан
     // ничего не стоит. Команда читается через ent::GetTeam (uint8!) —
@@ -220,14 +221,13 @@ namespace {
 
     bool FindTeammateTarget(uintptr_t localPlayer, uintptr_t entityList,
                             uint8_t localTeam, ent::Vector3& outOrigin,
-                            int& outHealth, uint8_t& outLifeState,
+                            int& outHealth,
                             int& aliveCount, int& totalCount,
                             TeamScanStats& stats) {
-        uintptr_t bestAlive = 0, bestAny = 0;
-        ent::Vector3 aliveOrigin{}, anyOrigin{};
-        float aliveDist2 = FLT_MAX, anyDist2 = FLT_MAX;
-        int aliveHealth = 0, anyHealth = 0;
-        uint8_t aliveLife = 0, anyLife = 0;
+        uintptr_t bestPawn = 0;
+        ent::Vector3 bestOrigin{};
+        float bestDist2 = FLT_MAX;
+        int bestHealth = 0;
 
         const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
 
@@ -260,43 +260,29 @@ namespace {
             const float dz = origin.z - eye.z;
             const float d2 = dx * dx + dy * dy + dz * dz;
 
-            // Цель ближе 64 юнитов (свой труп под камерой смерти, тиммейт
-            // вплотную) даёт почти вертикальные углы — пропускаем.
+            // Ближе 64 юнитов (труп под камерой, тиммейт вплотную) — почти
+            // вертикальные углы, бесполезно.
             if (d2 < 64.0f * 64.0f)
                 continue;
 
             ++totalCount;
-            const uint8_t life = mem::Read<uint8_t>(pawn + off.m_lifeState);
-            const bool alive = life == 0 && mem::Read<int>(pawn + off.m_iHealth) > 0;
-            if (alive) {
-                ++aliveCount;
-                if (d2 < aliveDist2) {
-                    aliveDist2 = d2;
-                    bestAlive = pawn;
-                    aliveOrigin = origin;
-                    aliveHealth = mem::Read<int>(pawn + off.m_iHealth);
-                    aliveLife = life;
-                }
-            }
-            if (d2 < anyDist2) {
-                anyDist2 = d2;
-                bestAny = pawn;
-                anyOrigin = origin;
-                anyHealth = mem::Read<int>(pawn + off.m_iHealth);
-                anyLife = life;
+            // Живой: hp в разумных пределах. Трупы (hp=0) и мусор отсекаются.
+            const int hp = mem::Read<int>(pawn + off.m_iHealth);
+            if (hp <= 0 || hp > 1000)
+                continue;
+
+            ++aliveCount;
+            if (d2 < bestDist2) {
+                bestDist2 = d2;
+                bestPawn = pawn;
+                bestOrigin = origin;
+                bestHealth = hp;
             }
         }
 
-        if (bestAlive) {
-            outOrigin = aliveOrigin;
-            outHealth = aliveHealth;
-            outLifeState = aliveLife;
-            return true;
-        }
-        if (bestAny) {
-            outOrigin = anyOrigin;
-            outHealth = anyHealth;
-            outLifeState = anyLife;
+        if (bestPawn) {
+            outOrigin = bestOrigin;
+            outHealth = bestHealth;
             return true;
         }
         return false;
@@ -508,11 +494,10 @@ void RunFeatureLoop() {
         if (raimMode != 0) {
             ent::Vector3 targetOrigin{};
             int targetHealth = 0;
-            uint8_t targetLife = 0;
             int aliveCount = 0, totalCount = 0;
             TeamScanStats stats;
             if (FindTeammateTarget(localPlayer, entityList, localTeam,
-                                   targetOrigin, targetHealth, targetLife,
+                                   targetOrigin, targetHealth,
                                    aliveCount, totalCount, stats)) {
                 const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
                 if (eye.x != 0.0f || eye.y != 0.0f || eye.z != 0.0f) {
@@ -546,10 +531,10 @@ void RunFeatureLoop() {
                     const uint32_t now = GetTickCount();
                     if (now - lastLog > 5000) {
                         lastLog = now;
-                        NW_LOG(L"raimv%d: тиммейтов %d (живых %d), цель (%.0f %.0f %.0f) hp=%d ls=%d, eye (%.0f %.0f %.0f), углы (%.1f, %.1f)%s",
-                               raimMode, totalCount, aliveCount,
+                        NW_LOG(L"raimv%d: цель тиммейт (%.0f %.0f %.0f) hp=%d, eye (%.0f %.0f %.0f), углы (%.1f, %.1f)%s",
+                               raimMode,
                                targetOrigin.x, targetOrigin.y, targetOrigin.z,
-                               targetHealth, static_cast<int>(targetLife),
+                               targetHealth,
                                eye.x, eye.y, eye.z,
                                angles.x, angles.y,
                                raimMode == 2 ? (viaCmd ? L" — канал user cmd" : L" — канал viewAngles") : L"");
@@ -568,9 +553,10 @@ void RunFeatureLoop() {
                 const uint32_t now = GetTickCount();
                 if (now - lastNone > 5000) {
                     lastNone = now;
-                    NW_LOG(L"raimv%d: цель не найдена. скан 512: павнов %d, врагов %d, тиммейтов %d (нод %d, origin %d), localTeam=%d",
+                    NW_LOG(L"raimv%d: живых тиммейтов нет. скан 512: павнов %d, врагов %d, тиммейтов %d (живых %d, нод %d, origin %d), localTeam=%d",
                            raimMode, stats.pawns, stats.enemies, stats.teammates,
-                           stats.withNode, stats.withOrigin, static_cast<int>(localTeam));
+                           aliveCount, stats.withNode, stats.withOrigin,
+                           static_cast<int>(localTeam));
                 }
             }
         }
