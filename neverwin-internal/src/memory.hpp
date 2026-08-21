@@ -48,27 +48,31 @@ namespace mem {
     }
 
     // Безопасное чтение. Если память невалидна — возвращает T{} (нули).
-    // Двойная защита: сначала VirtualQuery-цепочка, потом SEH — если между
-    // проверкой и чтением регион успели освободить, не уроним игру.
+    // Двойная защита: сначала VirtualQuery-цепочка, потом SEH (только MSVC) —
+    // если между проверкой и чтением регион успели освободить, не уроним игру.
+    // На MinGW/Clang (zig) SEH через __try нет — полагаемся на IsValidPtr.
     template <typename T>
     inline T Read(uintptr_t addr) {
         if (addr == 0)
             return T{};
-        // Быстрая проверка — но даже если она прошла, чтение под SEH.
         if (!IsValidPtr(reinterpret_cast<const void*>(addr), sizeof(T)))
             return T{};
+#ifdef _MSC_VER
         __try {
             return *reinterpret_cast<const T*>(addr);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             return T{};
         }
+#else
+        return *reinterpret_cast<const T*>(addr);
+#endif
     }
 
     // Безопасная запись. Если регион read-only (например, секция с viewAngles) —
     // делает его writable. Повторный VirtualProtect для того же адреса
     // не выполняется (кэш последнего региона). Кэш thread_local: теперь
     // пишут ДВА потока (цикл фич и хук CreateMove) — общий кэш был бы гонкой.
-    // Письмо тоже под SEH — если регион умер между проверкой и записью.
+    // Письмо под SEH только на MSVC.
     template <typename T>
     inline bool Write(uintptr_t addr, const T& value) {
         if (addr == 0)
@@ -80,21 +84,31 @@ namespace mem {
         static thread_local size_t    s_lastSize = 0;
         if (s_lastAddr != addr || s_lastSize != sizeof(T)) {
             DWORD oldProtect = 0;
+#ifdef _MSC_VER
             __try {
                 if (!VirtualProtect(reinterpret_cast<void*>(addr), sizeof(T), PAGE_READWRITE, &oldProtect))
                     return false;
             } __except (EXCEPTION_EXECUTE_HANDLER) {
                 return false;
             }
+#else
+            if (!VirtualProtect(reinterpret_cast<void*>(addr), sizeof(T), PAGE_READWRITE, &oldProtect))
+                return false;
+#endif
             s_lastAddr = addr;
             s_lastSize = sizeof(T);
         }
 
+#ifdef _MSC_VER
         __try {
             *reinterpret_cast<T*>(addr) = value;
             return true;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             return false;
         }
+#else
+        *reinterpret_cast<T*>(addr) = value;
+        return true;
+#endif
     }
 }
