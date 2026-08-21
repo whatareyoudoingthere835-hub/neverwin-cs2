@@ -86,9 +86,18 @@ namespace ent {
         bool HasController() const { return controller != 0; }
         bool HasPawn() const { return pawn != 0; }
 
+        // Состояние самого pawn. Для определения жизни это более прямой
+        // признак, чем реплицируемый флаг controller.m_bPawnIsAlive: последний
+        // может кратко отставать при spawn/смене pawn.
+        bool IsPawnAlive() const {
+            return pawn != 0 && health > 0 && health <= 1000 && lifeState == 0;
+        }
+
+        // Строгий вариант для ragebot: сохраняем controller alive как
+        // дополнительный anti-stale фильтр.
         bool IsAlive() const {
             return controller != 0 && controllerAlive && IsValidPlayerHandle(pawnHandle) &&
-                   pawn != 0 && health > 0 && health <= 1000 && lifeState == 0;
+                   IsPawnAlive();
         }
 
         bool HasAimPosition() const {

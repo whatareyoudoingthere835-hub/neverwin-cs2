@@ -212,14 +212,20 @@ namespace {
         return true;
     }
 
-    // Цель реверс аима: ближайший ЖИВОЙ тиммейт. Игроки перечисляются только
-    // через 64 CCSPlayerController-слота. Затем текущий m_hPlayerPawn должен
-    // разрешиться в pawn, а controllerAlive/health/lifeState — согласоваться.
-    // Это исключает трупы и посторонние сущности из всех target-проверок.
+    // Цель реверс аима: ближайший живой тиммейт. Игроки перечисляются только
+    // через 64 CCSPlayerController-слота, а текущий m_hPlayerPawn обязан
+    // разрешиться в pawn. Для F1 жизнь определяется по health/lifeState pawn:
+    // m_bPawnIsAlive остаётся подробной диагностикой, поскольку этот флаг
+    // controller может запаздывать при spawn/смене pawn.
     struct TeamScanStats {
+        int slotsScanned = ent::kMaxPlayerSlots;
         int controllers = 0;
+        int emptySlots = 0;
         int pawns = 0;
+        int unresolvedPawn = 0;
+        int localPawn = 0;
         int alive = 0;
+        int pawnAliveButControllerFlagDead = 0;
         int enemies = 0;
         int teammates = 0;
         int controllerDead = 0;
@@ -249,60 +255,80 @@ namespace {
 
         // Только 64 controller-слота. Каждый pawn получается по актуальному
         // m_hPlayerPawn и проходит единую согласованную alive-проверку.
-        ent::ForEachPlayer(entityList, [&](const ent::PlayerSnapshot& player) {
+        // Reverse aim не должен объявлять всех тиммейтов мёртвыми только из-за
+        // кратко отставшего controller.m_bPawnIsAlive. Связь controller->handle
+        // уже подтверждена в ReadPlayerSlot; для самой жизни используем health +
+        // lifeState pawn. Строгий controllerAlive остаётся в ragebot-пути.
+        for (int slot = ent::kFirstPlayerSlot; slot <= ent::kMaxPlayerSlots; ++slot) {
+            const ent::PlayerSnapshot player = ent::ReadPlayerSlot(entityList, slot);
+            if (!player.HasController()) {
+                ++stats.emptySlots;
+                continue;
+            }
             ++stats.controllers;
             if (!player.HasPawn()) {
                 if (!ent::IsValidPlayerHandle(player.pawnHandle))
                     ++stats.invalidHandle;
-                return;
+                else
+                    ++stats.unresolvedPawn;
+                continue;
             }
-            if (player.pawn == localPlayer)
-                return;
+            if (player.pawn == localPlayer) {
+                ++stats.localPawn;
+                continue;
+            }
 
             ++stats.pawns;
             const uint8_t tIdx = player.team <= 3 ? player.team : 4;
             ++stats.teamPawns[tIdx];
 
-            if (!player.controllerAlive) ++stats.controllerDead;
-            if (player.health <= 0 || player.health > 1000) ++stats.healthDead;
-            if (player.lifeState != 0) ++stats.lifeDead;
+            if (!player.controllerAlive)
+                ++stats.controllerDead;
+            if (player.health <= 0 || player.health > 1000)
+                ++stats.healthDead;
+            if (player.lifeState != 0)
+                ++stats.lifeDead;
 
-            const bool alive = player.IsAlive();
-            if (alive) {
+            const bool pawnAlive = player.IsPawnAlive();
+            if (pawnAlive) {
                 ++stats.alive;
                 ++stats.teamAlive[tIdx];
+                if (!player.controllerAlive)
+                    ++stats.pawnAliveButControllerFlagDead;
             }
 
             if (player.team != localTeam) {
-                if (player.team != 0 && alive)
+                if (player.team != 0 && pawnAlive)
                     ++stats.enemies;
-                return;
+                continue;
             }
 
             ++stats.teammates;
             ++totalCount;
-            if (!alive)
-                return;
-            if (player.dormant) {
+            if (!pawnAlive)
+                continue;
+
+            // Для F1 dormant — диагностический признак, но не повод выбросить
+            // живого тиммейта: функция намеренно работает через стены. Ragebot
+            // по-прежнему требует non-dormant через IsTargetable().
+            if (player.dormant)
                 ++stats.dormant;
-                return;
-            }
             if (player.immune)
-                ++stats.immune; // для reverse aim immunity не мешает наводке
-            if (!player.HasAimPosition()) {
+                ++stats.immune;
+            if (player.sceneNode == 0 || !ent::IsUsablePlayerOrigin(player.origin)) {
                 ++stats.badPosition;
-                return;
+                continue;
             }
 
             const float dx = player.origin.x - eye.x;
             const float dy = player.origin.y - eye.y;
             const float dz = player.origin.z - eye.z;
             const float d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 < 64.0f * 64.0f) {
+            if (d2 < 64.0f * 64.0f)
                 ++stats.tooClose;
-                return;
-            }
 
+            // CalcAngles защищает горизонтальную дистанцию через fmax(1),
+            // поэтому близкий тиммейт остаётся валидной целью.
             ++aliveCount;
             if (d2 < bestDist2) {
                 bestDist2 = d2;
@@ -310,7 +336,7 @@ namespace {
                 bestHealth = player.health;
                 found = true;
             }
-        });
+        }
 
         if (!found)
             return false;
@@ -591,11 +617,12 @@ void RunFeatureLoop() {
                 if (now - lastNone > 5000) {
                     lastNone = now;
                     const ent::Vector3 eyeDbg = ent::GetEyePosition(localPlayer);
-                    NW_LOG(L"raimv%d: живых тиммейтов нет. controller scan: ctrls %d pawns %d alive %d enemies %d teammates %d (total %d aimable %d), reject ctrlDead %d badHandle %d hp %d life %d dormant %d badPos %d close %d immune %d, команды t0=%d/%d t1=%d/%d t2=%d/%d t3=%d/%d др=%d/%d (pawn/alive), local hp=%d ls=%d team=%d eye %.0f %.0f %.0f",
-                           raimMode, stats.controllers, stats.pawns, stats.alive,
+                    NW_LOG(L"raimv%d: подходящей цели нет (это НЕ обязательно значит, что все мертвы). scan: slots %d empty %d ctrls %d pawn %d unresolved %d badHandle %d local %d; pawnAlive %d ctrlFlagDead %d; enemies %d teammates %d (team total %d targetable %d); reject hp %d life %d dormant %d badPos %d close %d immune %d; teams t0=%d/%d t1=%d/%d t2=%d/%d t3=%d/%d other=%d/%d (pawn/pawnAlive); local hp=%d life=%d team=%d eye=%.0f %.0f %.0f",
+                           raimMode, stats.slotsScanned, stats.emptySlots, stats.controllers,
+                           stats.pawns, stats.unresolvedPawn, stats.invalidHandle, stats.localPawn,
+                           stats.alive, stats.pawnAliveButControllerFlagDead,
                            stats.enemies, stats.teammates, totalCount, aliveCount,
-                           stats.controllerDead, stats.invalidHandle, stats.healthDead,
-                           stats.lifeDead, stats.dormant, stats.badPosition,
+                           stats.healthDead, stats.lifeDead, stats.dormant, stats.badPosition,
                            stats.tooClose, stats.immune,
                            stats.teamPawns[0], stats.teamAlive[0],
                            stats.teamPawns[1], stats.teamAlive[1],
