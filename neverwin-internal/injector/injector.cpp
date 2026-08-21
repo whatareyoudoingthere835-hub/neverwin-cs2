@@ -15,6 +15,12 @@
 #include <cwchar>
 #include <string>
 
+// DLL по умолчанию (если запущен без аргументов). Для velocity-релиза
+// собирается с -DINJECTOR_DEFAULT_DLL="velocity_v1.dll".
+#ifndef INJECTOR_DEFAULT_DLL
+#define INJECTOR_DEFAULT_DLL "neverwin.dll"
+#endif
+
 namespace {
 
     void PrintLastError(const wchar_t* step) {
@@ -218,7 +224,7 @@ int wmain(int argc, wchar_t* argv[]) {
         return 1;
     }
 
-    const std::wstring dllPath = argc > 2 ? argv[2] : L"neverwin.dll";
+    const std::wstring dllPath = argc > 2 ? argv[2] : L"" INJECTOR_DEFAULT_DLL;
     wprintf(L"[*] Цель: cs2.exe (PID %lu)\n", pid);
 
     const bool ok = Inject(pid, dllPath);
