@@ -31,13 +31,14 @@ namespace ent {
         return mem::Read<uintptr_t>(listEntry + offsets::g.entryStride * (index & 0x1FF));
     }
 
-    // Полный обход энтити-листа: ВСЕ 32 блока по 512 слотов.
-    // Сканирование только блока 0 (хэндлы 1..512) теряло игроков с большими
-    // хэндлами — «5 тиммейтов, видно 1» из лога. Пустые блоки пропускаются,
-    // так что обход стоит столько же, сколько сущностей в игре.
+    // Полный обход энтити-листа: ВСЕ 64 блока по 512 слотов.
+    // Скан только 32 блоков терял игроков с индексами >= 0x4000 — в CS2
+    // список из 64 блоков (у квинта в его же коде: index>>9 <= 0x3F).
+    // «5 тиммейтов, видно 1» — они лежали в блоках 32..63.
+    // Пустые блоки пропускаются — обход стоит столько же, сколько сущностей.
     template <typename Fn>
     inline void ForEachPawn(uintptr_t entityList, Fn&& fn) {
-        for (uint32_t block = 0; block < 32; ++block) {
+        for (uint32_t block = 0; block < 64; ++block) {
             const uintptr_t listEntry =
                 mem::Read<uintptr_t>(entityList + offsets::g.listEntryOffset + 8ull * block);
             if (!listEntry)

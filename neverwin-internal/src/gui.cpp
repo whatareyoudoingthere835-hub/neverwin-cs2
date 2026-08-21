@@ -214,16 +214,14 @@ namespace {
                            "professional software for losing professionally");
         ImGui::Separator();
 
-        if (ImGui::BeginTabBar("neverwin_tabs")) {
-
-            // ------------------------------------------------------------------
-            // ОСНОВНОЕ
-            // ------------------------------------------------------------------
-            if (ImGui::BeginTabItem("ОСНОВНОЕ")) {
+        {
                 int raim = g_features.reverseAim.load();
-                const char* raimItems[] = { "Off", "raimv1", "raimv2" };
-                if (ImGui::Combo("Реверс аим: наводка на тимейтов [F1]", &raim, raimItems, 3))
+                const char* raimItems[] = { "Off", "raimv1", "raimv2", "test" };
+                if (ImGui::Combo("Реверс аим: наводка на тимейтов [F1]", &raim, raimItems, 4))
                     g_features.reverseAim.store(raim);
+
+                if (raim == 3)
+                    ImGui::TextDisabled("test: юзеркоманда (канал андромеды) + страховка viewAngles");
 
                 bool v;
 
@@ -267,40 +265,6 @@ namespace {
                 }
                 ImGui::TextDisabled("v%d | P/INSERT - меню | END - выгрузка", NW_VERSION);
 
-                ImGui::EndTabItem();
-            }
-
-            // ------------------------------------------------------------------
-            // VELOCITY — аимбот
-            // ------------------------------------------------------------------
-            if (ImGui::BeginTabItem("VELOCITY")) {
-                bool rage = g_features.rageAim.load();
-                if (ImGui::Checkbox("Аимбот включён", &rage))
-                    g_features.rageAim.store(rage);
-
-                int tgt = g_features.rageTarget.load();
-                const char* tgtItems[] = { "Тимейты (team)", "Враги (nonteam)" };
-                if (ImGui::Combo("Цель", &tgt, tgtItems, 2))
-                    g_features.rageTarget.store(tgt);
-
-                float fov = g_features.rageFov.load();
-                if (ImGui::SliderFloat("FOV", &fov, 1.0f, 180.0f, "%.0f°"))
-                    g_features.rageFov.store(fov);
-
-                float smooth = g_features.rageSmooth.load();
-                if (ImGui::SliderFloat("Сглаживание", &smooth, 1.0f, 30.0f, "%.0f"))
-                    g_features.rageSmooth.store(smooth);
-
-                ImGui::Separator();
-                ImGui::TextDisabled("цель: ближайший по FOV живой павн выбранной стороны");
-                ImGui::TextDisabled("через стены: да (видимость не проверяется)");
-                ImGui::TextDisabled("цель: origin + 64 (корпус/голова)");
-                ImGui::TextDisabled("при включённом аимботе raim (F1) отключается");
-
-                ImGui::EndTabItem();
-            }
-
-            ImGui::EndTabBar();
         }
 
         ImGui::End();

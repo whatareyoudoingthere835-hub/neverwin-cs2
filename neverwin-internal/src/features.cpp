@@ -22,10 +22,10 @@ namespace {
 
     // --- Хоткеи. Маппинг соответствует оригинальному internal.txt. ---
     void HandleHotkeys() {
-        // F1 циклит: выкл -> raimv1 -> raimv2 -> выкл.
+        // F1 циклит: выкл -> raimv1 -> raimv2 -> test -> выкл.
         if (GetAsyncKeyState(VK_F1) & 1) {
             const int m = g_features.reverseAim.load();
-            g_features.reverseAim.store((m + 1) % 3);
+            g_features.reverseAim.store((m + 1) % 4);
         }
         if (GetAsyncKeyState(VK_F2) & 1) g_features.antiAimless.store(!g_features.antiAimless.load());
         if (GetAsyncKeyState(VK_F3) & 1) g_features.visualRecoil.store(!g_features.visualRecoil.load());
@@ -78,6 +78,7 @@ namespace {
     } g_cmdLayout;
 
     uint32_t g_cmdFails = 0;
+    float    g_lastProbeScore = FLT_MAX; // лучший score последней пробы (в лог)
 
     bool Raimv2ResolveLayout(uintptr_t ctx, const float livePitch, const float liveYaw) {
         if (!ent::IsSaneAngles(livePitch, liveYaw))
@@ -94,10 +95,12 @@ namespace {
             0x100, 0x140, 0x180, 0x1C0, 0x200, 0x280, 0x300, 0x400,
             0x500, 0x800, 0x1000,
         };
-        const uint32_t pbOffs[]   = { 0x18, 0x20 };       // quint / velocity
-        const uint32_t baseOffs[] = { 0x28, 0x10 };       // quint / velocity
-        const uint32_t msgOffs[]  = { 0x30, 0x20 };       // quint / velocity
-        const uint32_t angOffs[]  = { 0x18, 0x08 };       // quint / velocity
+        // кандидаты всех трёх источников: quint, velocity, andromeda (Message-база
+        // сгенерированного протобуфа даёт base_cmd в 0x20..0x28 и viewangles в 0x40+)
+        const uint32_t pbOffs[]   = { 0x10, 0x18, 0x20, 0x28 };
+        const uint32_t baseOffs[] = { 0x10, 0x18, 0x20, 0x28, 0x30 };
+        const uint32_t msgOffs[]  = { 0x20, 0x28, 0x30, 0x38, 0x40, 0x48 };
+        const uint32_t angOffs[]  = { 0x08, 0x10, 0x18 };
 
         for (uint32_t seqOff : seqOffs) {
             const int seq = mem::Read<int>(ctx + seqOff);
@@ -144,6 +147,8 @@ namespace {
                 }
             }
         }
+
+        g_lastProbeScore = best.score;
 
         if (best.score <= 25.0f) {
             g_cmdLayout = best.l;
@@ -287,73 +292,6 @@ namespace {
         return false;
     }
 
-    // ========================================================================
-    // Цель для вкладки VELOCITY: ближайший по FOV живой павн выбранной
-    // стороны (тимейты или враги), через стены. FOV считается как угол между
-    // текущим взглядом и направлением на цель.
-    // ========================================================================
-    bool FindRageTarget(uintptr_t localPlayer, uintptr_t entityList, uint8_t localTeam,
-                        bool wantEnemies, float maxFov,
-                        float curPitch, float curYaw,
-                        ent::Vector3& outOrigin, int& outHealth, float& outFov) {
-        const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
-        if (eye.x == 0.0f && eye.y == 0.0f && eye.z == 0.0f)
-            return false;
-
-        const float cp = curPitch / ent::kRadToDeg;
-        const float cy = curYaw / ent::kRadToDeg;
-        const ent::Vector3 fwd{ std::cosf(cp) * std::cosf(cy),
-                                std::cosf(cp) * std::sinf(cy),
-                                -std::sinf(cp) };
-
-        uintptr_t best = 0;
-        ent::Vector3 bestOrigin{};
-        float bestFov = FLT_MAX;
-        int bestHp = 0;
-
-        ent::ForEachPawn(entityList, [&](uintptr_t pawn) {
-            if (pawn == localPlayer)
-                return;
-            const uint8_t team = ent::GetTeam(pawn);
-            if (team == 0)
-                return;
-            if ((team != localTeam) != wantEnemies)
-                return;
-            const int hp = mem::Read<int>(pawn + off.m_iHealth);
-            if (hp <= 0 || hp > 1000)
-                return;
-            const uintptr_t node = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
-            if (!node)
-                return;
-            const ent::Vector3 origin = mem::Read<ent::Vector3>(node + off.m_vecAbsOrigin);
-            if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
-                return;
-
-            ent::Vector3 d{ origin.x - eye.x, origin.y - eye.y,
-                            origin.z + 64.0f - eye.z };
-            const float len = std::sqrtf(d.x * d.x + d.y * d.y + d.z * d.z);
-            if (len < 64.0f)
-                return;
-            d.x /= len; d.y /= len; d.z /= len;
-            float dot = fwd.x * d.x + fwd.y * d.y + fwd.z * d.z;
-            if (dot > 1.0f) dot = 1.0f;
-            if (dot < -1.0f) dot = -1.0f;
-            const float fov = std::acosf(dot) * ent::kRadToDeg;
-            if (fov <= maxFov && fov < bestFov) {
-                bestFov = fov;
-                best = pawn;
-                bestOrigin = origin;
-                bestHp = hp;
-            }
-        });
-
-        if (!best)
-            return false;
-        outOrigin = bestOrigin;
-        outHealth = bestHp;
-        outFov = bestFov;
-        return true;
-    }
 }
 
 void RunFeatureLoop() {
@@ -483,11 +421,9 @@ void RunFeatureLoop() {
             oldPunch = {};
         }
 
-        // --- 4a. Реверс аим (F1): raimv1 / raimv2. ---
-        // При включённом аимботе (VELOCITY) raim отключается — одна цель
-        // в один момент времени.
-        const bool rageOn = g_features.rageAim.load();
-        const int raimMode = rageOn ? 0 : g_features.reverseAim.load();
+        // --- 4a. Реверс аим (F1): raimv1 / raimv2 / test. ---
+        // test — канал как у андромеды: юзеркоманда + страховка viewAngles.
+        const int raimMode = g_features.reverseAim.load();
         if (raimMode != 0) {
             ent::Vector3 targetOrigin{};
             int targetHealth = 0;
@@ -505,7 +441,7 @@ void RunFeatureLoop() {
                     ent::NormalizeAngles(angles.x, angles.y);
 
                     bool viaCmd = false;
-                    if (raimMode == 2) {
+                    if (raimMode == 2 || raimMode == 3) {
                         viaCmd = Raimv2WriteToCmd(clientBase, angles.x, angles.y);
                         if (!viaCmd) {
                             ++g_cmdFails;
@@ -528,13 +464,19 @@ void RunFeatureLoop() {
                     const uint32_t now = GetTickCount();
                     if (now - lastLog > 5000) {
                         lastLog = now;
-                        NW_LOG(L"raimv%d: цель тиммейт (%.0f %.0f %.0f) hp=%d, eye (%.0f %.0f %.0f), углы (%.1f, %.1f)%s",
-                               raimMode,
-                               targetOrigin.x, targetOrigin.y, targetOrigin.z,
-                               targetHealth,
-                               eye.x, eye.y, eye.z,
-                               angles.x, angles.y,
-                               raimMode == 2 ? (viaCmd ? L" — канал user cmd" : L" — канал viewAngles") : L"");
+                        if (raimMode >= 2 && viaCmd) {
+                            NW_LOG(L"raimv%d: цель тиммейт (%.0f %.0f %.0f) hp=%d, eye (%.0f %.0f %.0f), углы (%.1f, %.1f) — канал user cmd",
+                                   raimMode, targetOrigin.x, targetOrigin.y, targetOrigin.z,
+                                   targetHealth, eye.x, eye.y, eye.z, angles.x, angles.y);
+                        } else if (raimMode >= 2) {
+                            NW_LOG(L"raimv%d: цель тиммейт (%.0f %.0f %.0f) hp=%d, углы (%.1f, %.1f) — канала user cmd нет, probe best %.1f°",
+                                   raimMode, targetOrigin.x, targetOrigin.y, targetOrigin.z,
+                                   targetHealth, angles.x, angles.y, g_lastProbeScore);
+                        } else {
+                            NW_LOG(L"raimv%d: цель тиммейт (%.0f %.0f %.0f) hp=%d, eye (%.0f %.0f %.0f), углы (%.1f, %.1f)",
+                                   raimMode, targetOrigin.x, targetOrigin.y, targetOrigin.z,
+                                   targetHealth, eye.x, eye.y, eye.z, angles.x, angles.y);
+                        }
                     }
                 } else {
                     static uint32_t lastEye = 0;
@@ -593,65 +535,5 @@ void RunFeatureLoop() {
             }
         }
 
-        // --- 4c. Аимбот (вкладка VELOCITY): враги или тиммейты. ---
-        // Цель — ближайший по FOV живой павн выбранной стороны, через стены.
-        // Углы — той же математикой, что и raim; канал — юзеркоманда
-        // + подстраховка прямой записью viewAngles.
-        if (rageOn) {
-            const bool wantEnemies = g_features.rageTarget.load() != 0;
-            const float maxFov = g_features.rageFov.load();
-            const float curPitch = mem::Read<float>(viewAnglesPtr);
-            const float curYaw = mem::Read<float>(viewAnglesPtr + 4);
-
-            ent::Vector3 targetOrigin{};
-            int targetHealth = 0;
-            float targetFov = 0.0f;
-            if (FindRageTarget(localPlayer, entityList, localTeam, wantEnemies, maxFov,
-                               curPitch, curYaw, targetOrigin, targetHealth, targetFov)) {
-                const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
-                const ent::Vector3 target{ targetOrigin.x, targetOrigin.y,
-                                           targetOrigin.z + 64.0f };
-                ent::Vector2 want = ent::CalcAngles(eye, target);
-                ent::NormalizeAngles(want.x, want.y);
-
-                // Сглаживание: 1 = мгновенно, больше = плавнее.
-                const float smooth = g_features.rageSmooth.load();
-                float dY = want.y - curYaw;
-                if (dY > 180.0f) dY -= 360.0f;
-                if (dY < -180.0f) dY += 360.0f;
-                const float p = curPitch + (want.x - curPitch) / smooth;
-                const float y = curYaw + dY / smooth;
-
-                bool viaCmd = Raimv2WriteToCmd(clientBase, p, y);
-                if (!viaCmd) {
-                    ++g_cmdFails;
-                    if (g_cmdFails >= 30) {
-                        g_cmdFails = 0;
-                        g_cmdLayout.resolved = false; // перепроба
-                    }
-                }
-                mem::Write<float>(viewAnglesPtr, p);
-                mem::Write<float>(viewAnglesPtr + 4, y);
-
-                static uint32_t lastLog = 0;
-                const uint32_t now = GetTickCount();
-                if (now - lastLog > 5000) {
-                    lastLog = now;
-                    NW_LOG(L"velocity-aim: цель %s (%.0f %.0f %.0f) hp=%d, fov=%.1f°, углы (%.1f, %.1f)%s",
-                           wantEnemies ? L"враг" : L"тимейт",
-                           targetOrigin.x, targetOrigin.y, targetOrigin.z,
-                           targetHealth, targetFov, p, y,
-                           viaCmd ? L" — канал user cmd" : L" — канал viewAngles");
-                }
-            } else {
-                static uint32_t lastNone = 0;
-                const uint32_t now = GetTickCount();
-                if (now - lastNone > 5000) {
-                    lastNone = now;
-                    NW_LOG(L"velocity-aim: живой цели (%s) в FOV %.0f° нет.",
-                           wantEnemies ? L"враги" : L"тимейты", maxFov);
-                }
-            }
-        }
     }
 }

@@ -13,13 +13,6 @@ struct Features {
     std::atomic<bool> visualRecoil{false}; // F3 — отдача x4
     std::atomic<bool> antiBhop{false};     // F4 — сброс FL_ONGROUND при прыжке
     std::atomic<bool> gamesense{true};     // F5 — рандомный дроп оружия (20%)
-
-    // --- Вкладка VELOCITY: аимбот по духу velocity. ---
-    // Цель: ближайший по FOV живой павн выбранной стороны, через стены.
-    std::atomic<bool> rageAim{false};    // включён (при включении raim отключается)
-    std::atomic<int>  rageTarget{0};     // 0 = тиммейты (team), 1 = враги (nonteam)
-    std::atomic<float> rageFov{180.0f};  // окно FOV в градусах (180 = всё)
-    std::atomic<float> rageSmooth{1.0f}; // сглаживание 1..30 (1 = мгновенно)
 };
 
 // Снапшот состояния для отображения в меню (диагностика).

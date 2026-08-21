@@ -38,9 +38,7 @@ features = {
     "antiaimless": False,
     "visrecoil": False,
     "antibhop": False,
-    "spinspeed": 1.0,  # 0..10: множитель спинбота F2 (0 — без кручения)
-    "rage": False,     # velocity-аимбот
-    "ragetarget": 0    # 0 = тиммейты (team), 1 = враги (nonteam)
+    "spinspeed": 1.0   # 0..10: множитель спинбота F2 (0 — без кручения)
 }
 
 def clear_console():
@@ -54,8 +52,7 @@ def draw_menu():
     print(f"[F3] Visual Recoil (+400%)         : {'ON' if features['visrecoil'] else 'OFF'}")
     print(f"[F4] Антибхоп                      : {'ON' if features['antibhop'] else 'OFF'}")
     print(f"[F7/F8] Скорость спинбота          : x{features['spinspeed']:.0f}")
-    print(f"[F9] Velocity аим                   : {'ON' if features['rage'] else 'OFF'}")
-    print(f"[F10] Цель аима                     : {'враги (nonteam)' if features['ragetarget'] else 'тимейты (team)'}")
+
     print(f"[--] Gamesense (Дроп оружия)       : ALWAYS ON (Пассивный дебафф 20%)")
     print("=================================")
 
@@ -79,13 +76,7 @@ def spin_speed_up(_):
 keyboard.on_press_key("F7", spin_speed_down)
 keyboard.on_press_key("F8", spin_speed_up)
 
-keyboard.on_press_key("F9", lambda _: toggle_feature("rage"))
 
-def rage_target_toggle(_):
-    features["ragetarget"] = 1 - features["ragetarget"]
-    draw_menu()
-
-keyboard.on_press_key("F10", rage_target_toggle)
 
 def iter_pawns(pm, entity_list):
     # Полный обход энтити-листа: ВСЕ 32 блока по 512 слотов.
@@ -293,82 +284,6 @@ def neverwin_loop():
                     new_y = view_y + 10.0 * features["spinspeed"]
                     if new_y > 180.0: new_y -= 360.0
                     pm.write_float(client + dwViewAngles + 4, new_y)
-
-            # --- 4c. VELOCITY АИМБОТ (враги или тиммейты, через стены) ---
-            if features["rage"] and not features["antiaimbot"]:
-                eye = [0.0, 0.0, 0.0]
-                scene_node = pm.read_longlong(local_player + m_pGameSceneNode)
-                if scene_node:
-                    eye = [
-                        pm.read_float(scene_node + m_vecAbsOrigin),
-                        pm.read_float(scene_node + m_vecAbsOrigin + 4),
-                        pm.read_float(scene_node + m_vecAbsOrigin + 8),
-                    ]
-                vox = pm.read_float(local_player + m_vecViewOffset)
-                voy = pm.read_float(local_player + m_vecViewOffset + 4)
-                voz = pm.read_float(local_player + m_vecViewOffset + 8)
-                if not (-100.0 <= vox <= 100.0): vox = 0.0
-                if not (-100.0 <= voy <= 100.0): voy = 0.0
-                if not (-200.0 <= voz <= 300.0): voz = 64.0
-                eye[0] += vox; eye[1] += voy; eye[2] += voz
-
-                if eye != [0.0, 0.0, 0.0]:
-                    want_enemies = bool(features["ragetarget"])
-                    cur_pitch = pm.read_float(client + dwViewAngles)
-                    cur_yaw = pm.read_float(client + dwViewAngles + 4)
-                    cp, cy = math.radians(cur_pitch), math.radians(cur_yaw)
-                    fx = math.cos(cp) * math.cos(cy)
-                    fy = math.cos(cp) * math.sin(cy)
-                    fz = -math.sin(cp)
-
-                    best = None
-                    best_fov = float("inf")
-                    for pawn in iter_pawns(pm, entity_list):
-                        if pawn == local_player:
-                            continue
-                        team = pm.read_uint(pawn + m_iTeamNum) & 0xFF  # uint8
-                        if team == 0:
-                            continue
-                        if (team != local_team) != want_enemies:
-                            continue
-                        hp = pm.read_int(pawn + m_iHealth)
-                        if hp <= 0 or hp > 1000:
-                            continue
-                        node = pm.read_longlong(pawn + m_pGameSceneNode)
-                        if not node:
-                            continue
-                        origin = [
-                            pm.read_float(node + m_vecAbsOrigin),
-                            pm.read_float(node + m_vecAbsOrigin + 4),
-                            pm.read_float(node + m_vecAbsOrigin + 8),
-                        ]
-                        if origin == [0.0, 0.0, 0.0]:
-                            continue
-                        dx = origin[0] - eye[0]
-                        dy = origin[1] - eye[1]
-                        dz = origin[2] + 64.0 - eye[2]
-                        length = math.sqrt(dx * dx + dy * dy + dz * dz)
-                        if length < 64.0:
-                            continue
-                        dot = (fx * dx + fy * dy + fz * dz) / length
-                        dot = max(-1.0, min(1.0, dot))
-                        fov = math.degrees(math.acos(dot))
-                        if fov < best_fov:
-                            best_fov = fov
-                            best = origin
-
-                    if best:
-                        dx = best[0] - eye[0]
-                        dy = best[1] - eye[1]
-                        dz = best[2] + 64.0 - eye[2]
-                        dist2d = max(math.hypot(dx, dy), 1.0)
-                        pitch = math.degrees(math.atan2(-dz, dist2d))
-                        yaw = math.degrees(math.atan2(dy, dx))
-                        pitch = max(-89.0, min(89.0, pitch))
-                        while yaw > 180.0: yaw -= 360.0
-                        while yaw < -180.0: yaw += 360.0
-                        pm.write_float(client + dwViewAngles, pitch)
-                        pm.write_float(client + dwViewAngles + 4, yaw)
 
         except Exception:
             # Игнорим ошибки чтения (например, во время загрузки карты)
