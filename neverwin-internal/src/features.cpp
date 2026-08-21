@@ -236,9 +236,113 @@ void RunFeatureLoop() {
             oldPunch = {};
         }
 
-        // --- 4. F1/F2 (углы) — теперь в input_hooks.cpp, в хуке CreateMove. ---
-        // Писать dwViewAngles из фонового потока бесполезно: CS2 каждый тик
-        // перезаписывает их из юзеркоманды. Канал тот же, что у quintcs2:
-        // углы в текущий user cmd внутри CSGOInput::CreateMove.
+        // --- 4a. Реверс аимбот (F1): наводка на ближайшего живого тиммейта. ---
+        // Прямая запись viewAngles из цикла фич — тот же метод, что был до
+        // переноса на CreateMove. F2 так работал (камера в пол + кручение),
+        // значит прямые записи до игры доходят. Канал через user cmd убран:
+        // на твоём клиенте хук CreateMove не встал (см. лог), он был мёртвым.
+        if (g_features.antiAimbot.load()) {
+            const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
+            if (eye.x != 0.0f || eye.y != 0.0f || eye.z != 0.0f) {
+                uintptr_t bestPawn = 0;
+                ent::Vector3 bestOrigin{};
+                float bestDist2 = FLT_MAX;
+                int teammates = 0;
+
+                for (uint32_t i = 1; i < 64; ++i) {
+                    const uintptr_t pawn = ent::GetEntityByHandle(entityList, i);
+                    if (!pawn || pawn == localPlayer)
+                        continue;
+                    if (mem::Read<int>(pawn + off.m_iHealth) <= 0)
+                        continue;
+                    if (mem::Read<int>(pawn + off.m_iTeamNum) != localTeam)
+                        continue;
+
+                    ++teammates;
+                    const uintptr_t sceneNode = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
+                    if (!sceneNode)
+                        continue;
+                    const ent::Vector3 origin = mem::Read<ent::Vector3>(sceneNode + off.m_vecAbsOrigin);
+                    if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
+                        continue;
+
+                    const float dx = origin.x - eye.x;
+                    const float dy = origin.y - eye.y;
+                    const float dz = origin.z - eye.z;
+                    const float dist2 = dx * dx + dy * dy + dz * dz;
+                    if (dist2 < bestDist2) {
+                        bestDist2 = dist2;
+                        bestPawn = pawn;
+                        bestOrigin = origin;
+                    }
+                }
+
+                if (bestPawn) {
+                    // +64 юнита вверх от origin — корпус/голова.
+                    const ent::Vector3 target{ bestOrigin.x, bestOrigin.y, bestOrigin.z + 64.0f };
+                    ent::Vector2 angles = ent::CalcAngles(eye, target);
+                    ent::NormalizeAngles(angles.x, angles.y);
+                    mem::Write<float>(viewAnglesPtr, angles.x);
+                    mem::Write<float>(viewAnglesPtr + 4, angles.y);
+
+                    static uint32_t lastLog = 0;
+                    const uint32_t now = GetTickCount();
+                    if (now - lastLog > 5000) {
+                        lastLog = now;
+                        NW_LOG(L"F1: тиммейтов %d, цель (%.0f %.0f %.0f), углы (%.1f, %.1f)",
+                               teammates, bestOrigin.x, bestOrigin.y, bestOrigin.z,
+                               angles.x, angles.y);
+                    }
+                } else {
+                    static uint32_t lastNone = 0;
+                    const uint32_t now = GetTickCount();
+                    if (now - lastNone > 5000) {
+                        lastNone = now;
+                        NW_LOG(L"F1: живых тиммейтов не найдено (%d в списке) — наводиться не на кого.",
+                               teammates);
+                    }
+                }
+            } else {
+                static uint32_t lastEye = 0;
+                const uint32_t now = GetTickCount();
+                if (now - lastEye > 5000) {
+                    lastEye = now;
+                    NW_LOG(L"F1: глаза не прочитались (scene node / origin / viewOffset) — позиционные оффсеты стухли?");
+                }
+            }
+        }
+
+        // --- 4b. Антиаимлесс (F2): виден враг — взгляд в пол. ---
+        // Тот же метод, что работал до переноса: прямая запись viewAngles.
+        if (g_features.antiAimless.load()) {
+            bool enemySpotted = false;
+            for (uint32_t i = 1; i < 64; ++i) {
+                const uintptr_t pawn = ent::GetEntityByHandle(entityList, i);
+                if (!pawn || pawn == localPlayer)
+                    continue;
+
+                const int enemyHealth = mem::Read<int>(pawn + off.m_iHealth);
+                const int enemyTeam   = mem::Read<int>(pawn + off.m_iTeamNum);
+                if (enemyHealth > 0 && enemyTeam != localTeam) {
+                    enemySpotted = true;
+                    break;
+                }
+            }
+
+            if (enemySpotted) {
+                const float curYaw = mem::Read<float>(viewAnglesPtr + 4);
+                float newYaw = curYaw + 15.0f;
+                if (newYaw > 180.0f) newYaw -= 360.0f;
+                if (newYaw < -180.0f) newYaw += 360.0f;
+                mem::Write<float>(viewAnglesPtr, 89.0f);
+                mem::Write<float>(viewAnglesPtr + 4, newYaw);
+
+                static bool logged = false;
+                if (!logged) {
+                    NW_LOG(L"F2: враг виден — камера в пол + кручение.");
+                    logged = true;
+                }
+            }
+        }
     }
 }

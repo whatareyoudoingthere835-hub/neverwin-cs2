@@ -18,8 +18,6 @@ namespace offsets {
         std::uintptr_t dwEntityList      = 0x2555050; // CGameEntitySystem::m_list
         std::uintptr_t dwLocalPlayerPawn = 0x23AA118;
         std::uintptr_t dwViewAngles      = 0x23C01A8;
-        std::uintptr_t dwCSGOInput       = 0x23BFB20; // CCSGOInput* (CreateMove, углы F1/F2)
-        std::uintptr_t dwLocalPlayerController = 0x2384DB0; // контроллер (цепочка user cmd)
 
         // --- C_BaseEntity (и все наследники) ---
         std::uintptr_t m_iHealth         = 0x34C;
@@ -34,9 +32,6 @@ namespace offsets {
         // --- C_BasePlayerPawn ---
         std::uintptr_t m_pCameraServices = 0x1240; // CPlayer_CameraServices*
         std::uintptr_t m_pWeaponServices = 0x1208; // CPlayer_WeaponServices*
-
-        // --- CBasePlayerController: контекст команд (канал углов F1/F2) ---
-        std::uintptr_t m_CommandContext = 0x608;  // CCommandContext* (командное кольцо)
 
         // --- CPlayer_CameraServices: визуальный панч отдачи ---
         // (замена m_aimPunchAngle — поле переехало из павна в камеру)

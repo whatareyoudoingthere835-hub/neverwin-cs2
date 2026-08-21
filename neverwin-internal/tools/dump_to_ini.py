@@ -22,8 +22,7 @@ import re
 import sys
 
 # Сетевая часть: модуль client.dll
-NET_KEYS = ("dwEntityList", "dwLocalPlayerPawn", "dwViewAngles",
-            "dwCSGOInput", "dwLocalPlayerController")
+NET_KEYS = ("dwEntityList", "dwLocalPlayerPawn", "dwViewAngles")
 
 # Схема: класс -> ключи. Поиск СТРОГО внутри класса — многие имена полей
 # (m_fFlags, m_iHealth, ...) встречаются в разных классах с разными оффсетами,
@@ -35,7 +34,6 @@ CLASS_KEYS = {
     "C_BaseModelEntity":      ("m_vecViewOffset",),
     "CGameSceneNode":         ("m_vecAbsOrigin",),
     "C_BasePlayerPawn":       ("m_pCameraServices", "m_pWeaponServices"),
-    "CBasePlayerController":  ("m_CommandContext",),
     "CPlayer_CameraServices": ("m_vecCsViewPunchAngle",),
     "CPlayer_WeaponServices": ("m_hActiveWeapon",),
     "C_BasePlayerWeapon":     ("m_iClip1",),

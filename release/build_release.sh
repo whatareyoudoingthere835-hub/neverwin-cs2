@@ -88,7 +88,7 @@ DEF
 # Меню в игре (quint-схема): ImGui + dx11-бэкенд + MinHook возвращаются в DLL.
 DLL_SRCS=(
     "$SRC/src/main.cpp" "$SRC/src/features.cpp"
-    "$SRC/src/gui.cpp" "$SRC/src/input_hooks.cpp" "$SRC/src/offsets.cpp"
+    "$SRC/src/gui.cpp" "$SRC/src/offsets.cpp"
     "$SRC/thirdparty/imgui/imgui.cpp" "$SRC/thirdparty/imgui/imgui_draw.cpp"
     "$SRC/thirdparty/imgui/imgui_tables.cpp" "$SRC/thirdparty/imgui/imgui_widgets.cpp"
     "$SRC/thirdparty/imgui/backends/imgui_impl_win32.cpp"

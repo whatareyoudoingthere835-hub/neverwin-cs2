@@ -1,7 +1,6 @@
 #include "pch.h"
 #include "gui.hpp"
 #include "features.hpp"
-#include "input_hooks.hpp"
 #include "log.hpp"
 #include "memory.hpp"
 
@@ -362,9 +361,8 @@ namespace gui {
             return false;
         }
 
-        // Хук CreateMove (ввод): F1/F2 пишут углы в user cmd, как quintcs2.
-        // Независим от рендера — ставится и на Vulkan.
-        inhooks::Init();
+        // Хук CreateMove удалён: на твоём клиенте он не встал (см. neverwin.log),
+        // а F1/F2 вернулись на прямые записи viewAngles из цикла фич.
 
         // Свопчейн может появиться чуть позже DLL (инжект во время загрузки).
         for (int i = 0; i < 300 && !g_swapChain; ++i) {

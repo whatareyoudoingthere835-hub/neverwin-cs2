@@ -41,8 +41,6 @@ namespace offsets {
         o.dwEntityList      = ReadHex(L"dwEntityList",      o.dwEntityList);
         o.dwLocalPlayerPawn = ReadHex(L"dwLocalPlayerPawn", o.dwLocalPlayerPawn);
         o.dwViewAngles      = ReadHex(L"dwViewAngles",      o.dwViewAngles);
-        o.dwCSGOInput       = ReadHex(L"dwCSGOInput",       o.dwCSGOInput);
-        o.dwLocalPlayerController = ReadHex(L"dwLocalPlayerController", o.dwLocalPlayerController);
         o.m_iHealth         = ReadHex(L"m_iHealth",         o.m_iHealth);
         o.m_iTeamNum        = ReadHex(L"m_iTeamNum",        o.m_iTeamNum);
         o.m_fFlags          = ReadHex(L"m_fFlags",          o.m_fFlags);
@@ -51,7 +49,6 @@ namespace offsets {
         o.m_vecAbsOrigin    = ReadHex(L"m_vecAbsOrigin",    o.m_vecAbsOrigin);
         o.m_pCameraServices = ReadHex(L"m_pCameraServices", o.m_pCameraServices);
         o.m_pWeaponServices = ReadHex(L"m_pWeaponServices", o.m_pWeaponServices);
-        o.m_CommandContext  = ReadHex(L"m_CommandContext",  o.m_CommandContext);
         o.m_vecCsViewPunchAngle = ReadHex(L"m_vecCsViewPunchAngle", o.m_vecCsViewPunchAngle);
         o.m_hActiveWeapon   = ReadHex(L"m_hActiveWeapon",   o.m_hActiveWeapon);
         o.m_iClip1          = ReadHex(L"m_iClip1",          o.m_iClip1);
