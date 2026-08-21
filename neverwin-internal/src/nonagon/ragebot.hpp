@@ -148,7 +148,6 @@ struct ILocalPlayer : public IPlayer
     virtual int   GetWeaponIndex()                       const = 0;
     virtual float GetSpread()                            const = 0;
     virtual float GetInaccuracy()                        const = 0;
-    virtual void  ForceAttack()                                = 0;
     virtual void  StopMovement()                               = 0;
     virtual bool  IsOnGround()                           const = 0;
 };

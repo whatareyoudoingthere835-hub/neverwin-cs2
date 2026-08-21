@@ -249,6 +249,10 @@ namespace {
                 if (ImGui::Checkbox("Nonagon Ragebot: рейдж + резолвер [F6]", &rage))
                     g_features.ragebot.store(rage);
                 if (rage) {
+                    bool autoFire = g_features.rageAutoFire.load();
+                    if (ImGui::Checkbox("  Автоогонь / триггер", &autoFire))
+                        g_features.rageAutoFire.store(autoFire);
+                    ImGui::TextDisabled("  Стреляет только по повторно проверенной живой цели");
                     bool resolver = g_features.resolver.load();
                     if (ImGui::Checkbox("  Резолвер (brute/lby/side)", &resolver))
                         g_features.resolver.store(resolver);

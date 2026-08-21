@@ -107,7 +107,8 @@ private:
         Vec3 delta = dst - src;
         float dist = delta.len();
         Vec3 ang;
-        ang.x = std::asin(delta.z / (dist>0?dist:1.f)) * (180.f/3.14159265f);
+        const float horizontal = std::fmax(std::sqrt(delta.x*delta.x + delta.y*delta.y), 1.f);
+        ang.x = std::atan2(-delta.z, horizontal) * (180.f/3.14159265f);
         ang.y = std::atan2(delta.y, delta.x) * (180.f/3.14159265f);
         ang.z = 0.f;
         return ang;

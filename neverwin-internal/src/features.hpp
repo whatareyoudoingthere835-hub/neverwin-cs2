@@ -15,6 +15,7 @@ struct Features {
     std::atomic<bool> gamesense{true};     // F5 — рандомный дроп оружия (20%)
     // Nonagon ragebot (F6)
     std::atomic<bool> ragebot{false};      // F6 — рейджбот с резолвером из nonagon
+    std::atomic<bool> rageAutoFire{true};  // автоогонь/триггер после подтверждения живой цели
     std::atomic<bool> resolver{true};      // резолвер вкл/выкл
     std::atomic<bool> backtrack{true};     // бэктрек
     std::atomic<int>  rageFov{180};        // фов рейджа

@@ -32,12 +32,20 @@ namespace offsets {
         std::uintptr_t m_vecAbsOrigin    = 0xC8;   // Vector (абсолютная позиция)
         std::uintptr_t m_bDormant        = 0x103;  // bool (дормант — игрок вне PVS, хп может быть 0)
 
-        // --- C_BasePlayerPawn ---
+        // --- C_BasePlayerPawn / C_CSPlayerPawnBase / C_CSPlayerPawn ---
         std::uintptr_t m_pCameraServices = 0x1240; // CPlayer_CameraServices*
         std::uintptr_t m_pWeaponServices = 0x1208; // CPlayer_WeaponServices*
+        std::uintptr_t m_bWaitForNoAttack = 0x1C98; // запрет выстрела после смены/респавна
+        std::uintptr_t m_bGunGameImmunity = 0x3268; // spawn protection
+        std::uintptr_t m_iIDEntIndex       = 0x342C; // сущность под прицелом
 
-        // --- CBasePlayerController: контекст команд (канал raimv2) ---
-        std::uintptr_t m_CommandContext = 0x608;  // CCommandContext* (командное кольцо)
+        // --- CCSPlayerController / CBasePlayerController ---
+        // Единственный надёжный путь перечисления игроков:
+        // controller -> m_hPlayerPawn -> pawn + согласованный alive-флаг.
+        std::uintptr_t m_hPlayerPawn      = 0x914;
+        std::uintptr_t m_bPawnIsAlive     = 0x91C;
+        std::uintptr_t m_nTickBase        = 0x6B8;
+        std::uintptr_t m_CommandContext   = 0x608;  // CCommandContext* (канал raimv2)
 
         // --- CPlayer_CameraServices: визуальный панч отдачи ---
         // (замена m_aimPunchAngle — поле переехало из павна в камеру)
@@ -49,6 +57,7 @@ namespace offsets {
 
         // --- оружие ---
         std::uintptr_t m_iClip1          = 0x1700; // C_BasePlayerWeapon
+        std::uintptr_t m_nNextPrimaryAttackTick = 0x16F0; // следующий разрешённый тик выстрела
         std::uintptr_t m_bInReload       = 0x1814; // C_CSWeaponBase
         std::uintptr_t m_pWeaponVData    = 0x388;  // C_BasePlayerWeapon -> CCSWeaponBaseVData* (weapon_data)
 

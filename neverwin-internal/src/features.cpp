@@ -212,38 +212,27 @@ namespace {
         return true;
     }
 
-    // Цель реверс аима: ближайший ЖИВОЙ тиммейт. Трупы не берутся вообще —
-    // фолбэк «целиться в труп» убран: прицел вёл на мертвецов, когда живых
-    // не было. Стены и дальность не проверяются.
-    //
-    // Скан по 512 хэндлам: игроки обычно в начале списка, но широкий скан
-    // ничего не стоит. Команда читается через ent::GetTeam (uint8!) —
-    // int-чтение ломало фильтр тиммейтов на части павнов.
-    //
-    // Диагностика: сколько павнов/врагов/тимейтов/нод/origin увидели —
-    // по этим числам видно, на каком шаге цепочка рвётся, если рвётся.
+    // Цель реверс аима: ближайший ЖИВОЙ тиммейт. Игроки перечисляются только
+    // через 64 CCSPlayerController-слота. Затем текущий m_hPlayerPawn должен
+    // разрешиться в pawn, а controllerAlive/health/lifeState — согласоваться.
+    // Это исключает трупы и посторонние сущности из всех target-проверок.
     struct TeamScanStats {
-        int pawns = 0, enemies = 0, teammates = 0, withNode = 0, withOrigin = 0;
-        int withDormant = 0, withNoDormant = 0;
-        int withLifeDead = 0, withLifeAlive = 0;
-        int withHealthZero = 0, withHealthGarbage = 0;
-        int withClose = 0;
-        // Гистограмма: павнов и живых (hp>0) по значению команды.
-        // Индексы 0..3 = команды 0..3, индекс 4 = всё остальное.
+        int controllers = 0;
+        int pawns = 0;
+        int alive = 0;
+        int enemies = 0;
+        int teammates = 0;
+        int controllerDead = 0;
+        int invalidHandle = 0;
+        int healthDead = 0;
+        int lifeDead = 0;
+        int dormant = 0;
+        int immune = 0;
+        int badPosition = 0;
+        int tooClose = 0;
+        // Индексы 0..3 = team, 4 = прочие значения.
         int teamPawns[5] = {0, 0, 0, 0, 0};
         int teamAlive[5] = {0, 0, 0, 0, 0};
-        // Для дебага: первые 5 тиммейтов что отвалились
-        struct FailSample {
-            uintptr_t pawn = 0;
-            int hp = 0;
-            uint8_t ls = 0;
-            uint8_t dormant = 0;
-            uint8_t team = 0;
-            float dist = 0;
-            bool hasNode = false;
-            bool hasOrigin = false;
-        } failSamples[5];
-        int failCount = 0;
     };
 
     bool FindTeammateTarget(uintptr_t localPlayer, uintptr_t entityList,
@@ -251,127 +240,139 @@ namespace {
                             int& outHealth,
                             int& aliveCount, int& totalCount,
                             TeamScanStats& stats) {
-        uintptr_t bestPawn = 0;
         ent::Vector3 bestOrigin{};
         float bestDist2 = FLT_MAX;
         int bestHealth = 0;
+        bool found = false;
 
         const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
 
-        // Полный обход всех блоков списка — иначе тиммейты с хэндлами выше
-        // 512 невидимы («5 тиммейтов, видно 1» из лога).
-        ent::ForEachPawn(entityList, [&](uintptr_t pawn) {
-            if (pawn == localPlayer)
+        // Только 64 controller-слота. Каждый pawn получается по актуальному
+        // m_hPlayerPawn и проходит единую согласованную alive-проверку.
+        ent::ForEachPlayer(entityList, [&](const ent::PlayerSnapshot& player) {
+            ++stats.controllers;
+            if (!player.HasPawn()) {
+                if (!ent::IsValidPlayerHandle(player.pawnHandle))
+                    ++stats.invalidHandle;
+                return;
+            }
+            if (player.pawn == localPlayer)
                 return;
 
             ++stats.pawns;
-            const uint8_t team = ent::GetTeam(pawn);
-            const uint8_t tIdx = (team <= 3) ? team : 4;
+            const uint8_t tIdx = player.team <= 3 ? player.team : 4;
             ++stats.teamPawns[tIdx];
-            const int teamHp = mem::Read<int>(pawn + off.m_iHealth);
-            if (teamHp > 0 && teamHp <= 1000)
+
+            if (!player.controllerAlive) ++stats.controllerDead;
+            if (player.health <= 0 || player.health > 1000) ++stats.healthDead;
+            if (player.lifeState != 0) ++stats.lifeDead;
+
+            const bool alive = player.IsAlive();
+            if (alive) {
+                ++stats.alive;
                 ++stats.teamAlive[tIdx];
-            if (team != localTeam) {
-                // Более строгий подсчет врагов: только живые (hp>0 && <=1000 && lifeState==0)
-                if (team != 0 && teamHp > 0 && teamHp <= 1000) {
-                    if (mem::Read<uint8_t>(pawn + off.m_lifeState) == 0)
-                        ++stats.enemies;
-                }
+            }
+
+            if (player.team != localTeam) {
+                if (player.team != 0 && alive)
+                    ++stats.enemies;
                 return;
             }
 
             ++stats.teammates;
-            const uintptr_t node = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
-            if (!node) {
-                if (stats.failCount < 5) {
-                    auto &s = stats.failSamples[stats.failCount++];
-                    s.pawn = pawn; s.team = team; s.hasNode = false;
-                }
-                return;
-            }
-            ++stats.withNode;
-
-            const uint8_t dormant = mem::Read<uint8_t>(node + off.m_bDormant);
-            if (dormant != 0) {
-                ++stats.withDormant;
-                if (stats.failCount < 5) {
-                    auto &s = stats.failSamples[stats.failCount++];
-                    s.pawn = pawn; s.team = team; s.dormant = dormant; s.hasNode = true;
-                }
-                return;
-            }
-            ++stats.withNoDormant;
-
-            const ent::Vector3 origin = mem::Read<ent::Vector3>(node + off.m_vecAbsOrigin);
-            if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f) {
-                if (stats.failCount < 5) {
-                    auto &s = stats.failSamples[stats.failCount++];
-                    s.pawn = pawn; s.team = team; s.hasNode = true; s.hasOrigin = false;
-                }
-                return;
-            }
-            ++stats.withOrigin;
-
-            const float dx = origin.x - eye.x;
-            const float dy = origin.y - eye.y;
-            const float dz = origin.z - eye.z;
-            const float d2 = dx * dx + dy * dy + dz * dz;
-            const float dist = std::sqrtf(d2);
-
-            if (d2 < 64.0f * 64.0f) {
-                ++stats.withClose;
-                if (stats.failCount < 5) {
-                    auto &s = stats.failSamples[stats.failCount++];
-                    s.pawn = pawn; s.team = team; s.dist = dist; s.hasNode = true; s.hasOrigin = true;
-                }
-                return;
-            }
-
             ++totalCount;
-            const uint8_t ls = mem::Read<uint8_t>(pawn + off.m_lifeState);
-            if (ls != 0) {
-                ++stats.withLifeDead;
-                if (stats.failCount < 5) {
-                    auto &s = stats.failSamples[stats.failCount++];
-                    s.pawn = pawn; s.team = team; s.ls = ls; s.dist = dist; s.hasNode = true; s.hasOrigin = true;
-                }
+            if (!alive)
+                return;
+            if (player.dormant) {
+                ++stats.dormant;
                 return;
             }
-            ++stats.withLifeAlive;
-            const int hp = mem::Read<int>(pawn + off.m_iHealth);
-            if (hp <= 0) {
-                ++stats.withHealthZero;
-                if (stats.failCount < 5) {
-                    auto &s = stats.failSamples[stats.failCount++];
-                    s.pawn = pawn; s.team = team; s.hp = hp; s.ls = ls; s.dist = dist; s.hasNode = true; s.hasOrigin = true;
-                }
+            if (player.immune)
+                ++stats.immune; // для reverse aim immunity не мешает наводке
+            if (!player.HasAimPosition()) {
+                ++stats.badPosition;
                 return;
             }
-            if (hp > 1000) {
-                ++stats.withHealthGarbage;
-                if (stats.failCount < 5) {
-                    auto &s = stats.failSamples[stats.failCount++];
-                    s.pawn = pawn; s.team = team; s.hp = hp; s.ls = ls; s.dist = dist; s.hasNode = true; s.hasOrigin = true;
-                }
+
+            const float dx = player.origin.x - eye.x;
+            const float dy = player.origin.y - eye.y;
+            const float dz = player.origin.z - eye.z;
+            const float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < 64.0f * 64.0f) {
+                ++stats.tooClose;
                 return;
             }
 
             ++aliveCount;
             if (d2 < bestDist2) {
                 bestDist2 = d2;
-                bestPawn = pawn;
-                bestOrigin = origin;
-                bestHealth = hp;
+                bestOrigin = player.origin;
+                bestHealth = player.health;
+                found = true;
             }
         });
 
-        if (bestPawn) {
-            outOrigin = bestOrigin;
-            outHealth = bestHealth;
+        if (!found)
+            return false;
+        outOrigin = bestOrigin;
+        outHealth = bestHealth;
+        return true;
+    }
+
+    // SendInput DOWN+UP в одном проходе часто попадал между игровыми тиками и
+    // терялся. Автоогонь держит кнопку коротким импульсом и всегда отпускает
+    // её при выключении фичи, открытии меню, потере фокуса или выгрузке DLL.
+    class RageAutoFireController {
+    public:
+        ~RageAutoFireController() { Release(); }
+
+        void Update(bool enabled) {
+            const DWORD now = GetTickCount();
+            if (m_down && (!enabled || now - m_downAt >= kHoldMs))
+                Release();
+        }
+
+        bool Fire() {
+            Update(true);
+            const DWORD now = GetTickCount();
+            if (m_down || now - m_lastPressAt < kMinPressIntervalMs)
+                return false;
+
+            DWORD foregroundPid = 0;
+            const HWND foreground = GetForegroundWindow();
+            if (!foreground || !GetWindowThreadProcessId(foreground, &foregroundPid) ||
+                foregroundPid != GetCurrentProcessId())
+                return false;
+
+            INPUT input{};
+            input.type = INPUT_MOUSE;
+            input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+            if (SendInput(1, &input, sizeof(INPUT)) != 1)
+                return false;
+
+            m_down = true;
+            m_downAt = now;
+            m_lastPressAt = now;
             return true;
         }
-        return false;
-    }
+
+        void Release() {
+            if (!m_down)
+                return;
+            INPUT input{};
+            input.type = INPUT_MOUSE;
+            input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+            SendInput(1, &input, sizeof(INPUT));
+            m_down = false;
+        }
+
+    private:
+        static constexpr DWORD kHoldMs = 10;
+        static constexpr DWORD kMinPressIntervalMs = 15;
+        bool m_down = false;
+        DWORD m_downAt = 0;
+        DWORD m_lastPressAt = 0;
+    };
 
 }
 
@@ -407,31 +408,32 @@ void RunFeatureLoop() {
 
     int previousAmmo = -1;
     Vector2 oldPunch{};
+    RageAutoFireController rageAutoFire;
     for (;;) {
         Sleep(1);
         HandleHotkeys();
+        const bool autoFireEnabled = g_features.ragebot.load() &&
+                                     g_features.rageAutoFire.load() &&
+                                     !gui::g_menuOpen.load();
+        rageAutoFire.Update(autoFireEnabled);
         if (gui::g_unloadRequested.load())
             return;
 
         const uintptr_t localPlayer = mem::Read<uintptr_t>(localPlayerPtr);
+        const uintptr_t localController =
+            mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerController);
+        const uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
         g_state.localPlayer.store(localPlayer);
-        if (!localPlayer)
+        g_state.entityList.store(entityList);
+        if (!localPlayer || !localController || !entityList)
             continue;
 
         const int health = mem::Read<int>(localPlayer + off.m_iHealth);
         g_state.localHealth.store(health);
-        if (health <= 0)
-            continue;
 
-        // Мёртвый/умирающий локальный: его труп остаётся в списке прямо под
-        // камерой смерти — raim наводился на него и уводил прицел в зенит.
-        // Пока локальный не жив (lifeState != 0) — фичи углов молчат.
-        if (mem::Read<uint8_t>(localPlayer + off.m_lifeState) != 0)
-            continue;
-
-        const uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
-        g_state.entityList.store(entityList);
-        if (!entityList)
+        // Жизнь локального проверяется тем же согласованным способом, что и
+        // жизнь целей: controller alive + актуальный handle + health/lifeState.
+        if (!ent::IsPlayerStillAlive(entityList, localController, localPlayer))
             continue;
 
         const uint8_t localTeam = ent::GetTeam(localPlayer);
@@ -574,10 +576,12 @@ void RunFeatureLoop() {
                 if (now - lastNone > 5000) {
                     lastNone = now;
                     const ent::Vector3 eyeDbg = ent::GetEyePosition(localPlayer);
-                    NW_LOG(L"raimv%d: живых тиммейтов нет. скан 64 блоков: павнов %d, врагов %d, teammates %d (total %d alive %d) node %d origin %d nodorm %d/%d life %d/%d hp0 %d garbage %d close %d, команды t0=%d/%d t1=%d/%d t2=%d/%d t3=%d/%d др=%d/%d (павнов/живых), local hp=%d ls=%d team=%d eye %.0f %.0f %.0f",
-                           raimMode, stats.pawns, stats.enemies, stats.teammates, totalCount, aliveCount,
-                           stats.withNode, stats.withOrigin, stats.withNoDormant, stats.withDormant,
-                           stats.withLifeAlive, stats.withLifeDead, stats.withHealthZero, stats.withHealthGarbage, stats.withClose,
+                    NW_LOG(L"raimv%d: живых тиммейтов нет. controller scan: ctrls %d pawns %d alive %d enemies %d teammates %d (total %d aimable %d), reject ctrlDead %d badHandle %d hp %d life %d dormant %d badPos %d close %d immune %d, команды t0=%d/%d t1=%d/%d t2=%d/%d t3=%d/%d др=%d/%d (pawn/alive), local hp=%d ls=%d team=%d eye %.0f %.0f %.0f",
+                           raimMode, stats.controllers, stats.pawns, stats.alive,
+                           stats.enemies, stats.teammates, totalCount, aliveCount,
+                           stats.controllerDead, stats.invalidHandle, stats.healthDead,
+                           stats.lifeDead, stats.dormant, stats.badPosition,
+                           stats.tooClose, stats.immune,
                            stats.teamPawns[0], stats.teamAlive[0],
                            stats.teamPawns[1], stats.teamAlive[1],
                            stats.teamPawns[2], stats.teamAlive[2],
@@ -585,11 +589,6 @@ void RunFeatureLoop() {
                            stats.teamPawns[4], stats.teamAlive[4],
                            health, mem::Read<uint8_t>(localPlayer + off.m_lifeState),
                            static_cast<int>(localTeam), eyeDbg.x, eyeDbg.y, eyeDbg.z);
-                    for (int i = 0; i < stats.failCount && i < 5; ++i) {
-                        auto &s = stats.failSamples[i];
-                        NW_LOG(L"  fail %d: pawn 0x%llX team %d hp %d ls %d dormant %d dist %.0f node %d origin %d",
-                               i, (unsigned long long)s.pawn, (int)s.team, s.hp, (int)s.ls, (int)s.dormant, s.dist, s.hasNode ? 1 : 0, s.hasOrigin ? 1 : 0);
-                    }
 
                     // test-режим: проверяем канал юзеркоманды даже без цели —
                     // проба раскладки против живых viewAngles.
@@ -619,21 +618,10 @@ void RunFeatureLoop() {
         // Тот же метод, что работал до переноса: прямая запись viewAngles.
         if (g_features.antiAimless.load()) {
             bool enemySpotted = false;
-            ent::ForEachPawn(entityList, [&](uintptr_t pawn) {
-                if (enemySpotted || pawn == localPlayer)
+            ent::ForEachPlayer(entityList, [&](const ent::PlayerSnapshot& player) {
+                if (enemySpotted || player.pawn == localPlayer)
                     return;
-
-                // Скипаем дормант и мертвых — иначе F2 триггерил на трупы/мусор
-                const uintptr_t eNode = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
-                if (eNode && mem::Read<uint8_t>(eNode + off.m_bDormant) != 0)
-                    return;
-                if (mem::Read<uint8_t>(pawn + off.m_lifeState) != 0)
-                    return;
-                const int enemyHealth = mem::Read<int>(pawn + off.m_iHealth);
-                if (enemyHealth <= 0 || enemyHealth > 1000)
-                    return;
-                const uint8_t enemyTeam = ent::GetTeam(pawn);
-                if (enemyTeam != localTeam && enemyTeam != 0)
+                if (player.team != 0 && player.team != localTeam && player.IsTargetable())
                     enemySpotted = true;
             });
 
@@ -664,26 +652,22 @@ void RunFeatureLoop() {
             storage.reserve(64);
             enemies.reserve(64);
 
-            int enemyIdx = 0;
-            ent::ForEachPawn(entityList, [&](uintptr_t pawn) {
-                if (pawn == localPlayer) return;
-                if (!mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode)) return;
-                // Дормант скип
-                uintptr_t node = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
-                if (node && mem::Read<uint8_t>(node + off.m_bDormant) != 0) return;
-                if (mem::Read<uint8_t>(pawn + off.m_lifeState) != 0) return;
-                int hp = mem::Read<int>(pawn + off.m_iHealth);
-                if (hp <= 0 || hp > 1000) return;
-                uint8_t team = ent::GetTeam(pawn);
-                if (team == 0 || team == localTeam) return;
-
-                storage.emplace_back(pawn, enemyIdx++, localTeam, entityList);
+            ent::ForEachPlayer(entityList, [&](const ent::PlayerSnapshot& player) {
+                if (player.pawn == localPlayer)
+                    return;
+                if (player.team == 0 || player.team == localTeam)
+                    return;
+                if (!player.IsTargetable())
+                    return;
+                storage.emplace_back(player, localTeam, entityList);
             });
 
-            for (auto &p : storage) enemies.push_back(&p);
+            for (auto &p : storage)
+                enemies.push_back(&p);
 
             if (!enemies.empty()) {
-                nonagon_cs2::CS2LocalPlayer local(localPlayer, clientBase, localTeam, entityList);
+                nonagon_cs2::CS2LocalPlayer local(localController, localPlayer, clientBase,
+                                                  localTeam, entityList);
                 auto &nonagon = nonagon_cs2::GetNonagon();
                 WeaponConfig wcfg;
                 wcfg.enabled = true;
@@ -692,56 +676,83 @@ void RunFeatureLoop() {
                 wcfg.min_damage = g_features.rageMinDamage.load();
                 wcfg.hitboxes = (1 << HITBOX_HEAD) | (1 << HITBOX_CHEST);
 
-                AimTarget target = nonagon_cs2::SelectTargetWithResolver(&local, enemies, wcfg, nonagon.resolver, 3);
+                nonagon.cfg.auto_fire = g_features.rageAutoFire.load();
+                AimTarget target = nonagon_cs2::SelectTargetWithResolver(
+                    &local, enemies, wcfg, nonagon.resolver, nonagon.cfg.head_misses_trigger);
 
+                nonagon_cs2::CS2Player* targetPlayer = nullptr;
                 if (target.valid) {
-                    // Углы к цели
-                    Vec3 eye = local.GetEyePos();
-                    Vec3 aimPos = target.aimPos;
-                    Vec3 delta = {aimPos.x - eye.x, aimPos.y - eye.y, aimPos.z - eye.z};
-                    float dist = std::sqrtf(delta.x*delta.x + delta.y*delta.y + delta.z*delta.z);
-                    if (dist > 0.1f) {
-                        float pitch = std::asin(delta.z / dist) * 180.f / 3.14159265f;
-                        float yaw = std::atan2(delta.y, delta.x) * 180.f / 3.14159265f;
-                        // Нормализация как в raim
-                        if (pitch > 89.f) pitch = 89.f;
-                        if (pitch < -89.f) pitch = -89.f;
-                        while (yaw > 180.f) yaw -= 360.f;
-                        while (yaw < -180.f) yaw += 360.f;
+                    for (auto& player : storage) {
+                        if (player.GetIndex() == target.playerIndex) {
+                            targetPlayer = &player;
+                            break;
+                        }
+                    }
+                }
 
-                        // Пишем через юзеркоманду если резолвер вкл, иначе напрямую
+                // Снимок мог устареть между сбором списка и выбором hitbox.
+                // Не наводимся и тем более не стреляем без повторной проверки
+                // controller -> текущий handle -> тот же живой pawn.
+                if (target.valid && targetPlayer && targetPlayer->IsTargetable()) {
+                    const Vec3 eye = local.GetEyePos();
+                    const Vec3 aimPos = target.aimPos;
+                    const Vec3 delta = {aimPos.x - eye.x, aimPos.y - eye.y, aimPos.z - eye.z};
+                    const float horizontal = std::sqrtf(delta.x*delta.x + delta.y*delta.y);
+                    const float dist = std::sqrtf(horizontal*horizontal + delta.z*delta.z);
+                    if (dist > 0.1f) {
+                        // Source 2 использует отрицательный pitch для взгляда вверх.
+                        float pitch = std::atan2f(-delta.z, std::fmaxf(horizontal, 1.0f)) * ent::kRadToDeg;
+                        float yaw = std::atan2f(delta.y, delta.x) * ent::kRadToDeg;
+                        ent::NormalizeAngles(pitch, yaw);
+
                         bool viaCmd = false;
-                        if (g_features.resolver.load()) {
+                        if (g_features.resolver.load())
                             viaCmd = Raimv2WriteToCmd(clientBase, pitch, yaw);
-                        }
+
+                        bool aimApplied = viaCmd;
                         if (!viaCmd) {
-                            mem::Write<float>(viewAnglesPtr, pitch);
-                            mem::Write<float>(viewAnglesPtr + 4, yaw);
+                            const Vector2 angles{pitch, yaw};
+                            aimApplied = mem::Write<Vector2>(viewAnglesPtr, angles);
                         }
+
+                        // Настоящий trigger-гейт: ждём, пока игра подтвердит pawn
+                        // под прицелом, либо пока угловая ошибка после предыдущего
+                        // прохода не станет практически нулевой. Поэтому первый
+                        // кадр захвата цели только наводит, следующий уже стреляет.
+                        const bool triggerConfirmed =
+                            ent::IsCrosshairOnPawn(localPlayer, entityList, targetPlayer->GetPawn()) ||
+                            target.fov <= 1.5f;
 
                         static uint32_t lastRageLog = 0;
-                        uint32_t now = GetTickCount();
+                        const uint32_t now = GetTickCount();
                         if (now - lastRageLog > 2000) {
                             lastRageLog = now;
                             const auto &state = nonagon.resolver.GetState(target.playerIndex);
-                            NW_LOG(L"nonagon rage: цель %d hb %d fov %.1f dmg %.0f resolvedYaw %.1f method %d misses %d",
-                                   target.playerIndex, (int)target.hitbox, target.fov, target.damage,
-                                   state.resolvedYaw, (int)state.method, state.missedShots);
+                            NW_LOG(L"nonagon rage: цель slot %d pawn 0x%llX hb %d fov %.1f dmg %.0f resolvedYaw %.1f method %d misses %d autofire %s trigger %s",
+                                   target.playerIndex + 1,
+                                   static_cast<unsigned long long>(targetPlayer->GetPawn()),
+                                   static_cast<int>(target.hitbox), target.fov, target.damage,
+                                   state.resolvedYaw, static_cast<int>(state.method), state.missedShots,
+                                   autoFireEnabled ? L"on" : L"off",
+                                   triggerConfirmed ? L"ready" : L"aiming");
                         }
 
-                        // Авто-огонь
-                        if (local.CanFire()) {
-                            // Форс атаки
-                            local.ForceAttack();
+                        // Автоогонь/триггер: угол уже применён, оружие прошло
+                        // cooldown-проверку, а цель проверяется ещё раз прямо
+                        // перед mouse-down. DOWN и UP разносятся по времени.
+                        if (autoFireEnabled && nonagon.cfg.auto_fire && aimApplied &&
+                            triggerConfirmed && targetPlayer->IsTargetable() && local.CanFire()) {
+                            rageAutoFire.Fire();
                         }
                     }
                 } else {
                     static uint32_t lastNoTarget = 0;
-                    uint32_t now = GetTickCount();
+                    const uint32_t now = GetTickCount();
                     if (now - lastNoTarget > 5000) {
                         lastNoTarget = now;
-                        NW_LOG(L"nonagon rage: целей нет (врагов %d), fov %d hc %d dmg %d",
-                               (int)enemies.size(), g_features.rageFov.load(), g_features.rageHitchance.load(), g_features.rageMinDamage.load());
+                        NW_LOG(L"nonagon rage: целей нет (валидных controller/pawn врагов %d), fov %d hc %d dmg %d",
+                               static_cast<int>(enemies.size()), g_features.rageFov.load(),
+                               g_features.rageHitchance.load(), g_features.rageMinDamage.load());
                     }
                 }
             }

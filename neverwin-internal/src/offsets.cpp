@@ -52,10 +52,17 @@ namespace offsets {
         o.m_bDormant        = ReadHex(L"m_bDormant",        o.m_bDormant);
         o.m_pCameraServices = ReadHex(L"m_pCameraServices", o.m_pCameraServices);
         o.m_pWeaponServices = ReadHex(L"m_pWeaponServices", o.m_pWeaponServices);
+        o.m_bWaitForNoAttack = ReadHex(L"m_bWaitForNoAttack", o.m_bWaitForNoAttack);
+        o.m_bGunGameImmunity = ReadHex(L"m_bGunGameImmunity", o.m_bGunGameImmunity);
+        o.m_iIDEntIndex     = ReadHex(L"m_iIDEntIndex",     o.m_iIDEntIndex);
+        o.m_hPlayerPawn     = ReadHex(L"m_hPlayerPawn",     o.m_hPlayerPawn);
+        o.m_bPawnIsAlive    = ReadHex(L"m_bPawnIsAlive",    o.m_bPawnIsAlive);
+        o.m_nTickBase       = ReadHex(L"m_nTickBase",       o.m_nTickBase);
         o.m_CommandContext  = ReadHex(L"m_CommandContext",  o.m_CommandContext);
         o.m_vecCsViewPunchAngle = ReadHex(L"m_vecCsViewPunchAngle", o.m_vecCsViewPunchAngle);
         o.m_hActiveWeapon   = ReadHex(L"m_hActiveWeapon",   o.m_hActiveWeapon);
         o.m_iClip1          = ReadHex(L"m_iClip1",          o.m_iClip1);
+        o.m_nNextPrimaryAttackTick = ReadHex(L"m_nNextPrimaryAttackTick", o.m_nNextPrimaryAttackTick);
         o.m_bInReload       = ReadHex(L"m_bInReload",       o.m_bInReload);
         o.m_pWeaponVData    = ReadHex(L"m_pWeaponVData",    o.m_pWeaponVData);
         o.m_nDamage         = ReadHex(L"m_nDamage",         o.m_nDamage);
