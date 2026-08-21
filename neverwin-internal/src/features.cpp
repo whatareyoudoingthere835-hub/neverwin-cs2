@@ -220,10 +220,13 @@ namespace {
     // по этим числам видно, на каком шаге цепочка рвётся, если рвётся.
     struct TeamScanStats {
         int pawns = 0, enemies = 0, teammates = 0, withNode = 0, withOrigin = 0;
-        // Гистограмма: павнов и живых (hp>0) по значению команды.
+        // Гистограмма: павнов и живых (0 < hp < 100000) по значению команды.
         // Индексы 0..3 = команды 0..3, индекс 4 = всё остальное.
         int teamPawns[5] = {0, 0, 0, 0, 0};
         int teamAlive[5] = {0, 0, 0, 0, 0};
+        int hpAnomalies = 0;           // hp вне (0, 100000) — мусор или супер-босс
+        int teammateHpSamples[4] = {0, 0, 0, 0}; // hp первых 4 павнов своей команды
+        int teammateHpCount = 0;
     };
 
     bool FindTeammateTarget(uintptr_t localPlayer, uintptr_t entityList,
@@ -249,13 +252,17 @@ namespace {
             const uint8_t tIdx = (team <= 3) ? team : 4;
             ++stats.teamPawns[tIdx];
             const int teamHp = mem::Read<int>(pawn + off.m_iHealth);
-            if (teamHp > 0 && teamHp <= 1000)
+            if (teamHp > 0 && teamHp < 100000)
                 ++stats.teamAlive[tIdx];
+            else if (teamHp != 0)
+                ++stats.hpAnomalies;
             if (team != localTeam) {
-                if (team != 0 && teamHp > 0)
+                if (team != 0 && teamHp > 0 && teamHp < 100000)
                     ++stats.enemies;
                 return;
             }
+            if (stats.teammateHpCount < 4)
+                stats.teammateHpSamples[stats.teammateHpCount++] = teamHp;
 
             ++stats.teammates;
             const uintptr_t node = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
@@ -279,9 +286,10 @@ namespace {
                 return;
 
             ++totalCount;
-            // Живой: hp в разумных пределах. Трупы (hp=0) и мусор отсекаются.
+            // Живой: hp в (0, 100000). Потолок большой намеренно: на серверах
+            // с бустом хп у игроков тысячи hp, и фильтр <=1000 резал живых.
             const int hp = mem::Read<int>(pawn + off.m_iHealth);
-            if (hp <= 0 || hp > 1000)
+            if (hp <= 0 || hp >= 100000)
                 return;
 
             ++aliveCount;
@@ -501,13 +509,16 @@ void RunFeatureLoop() {
                 const uint32_t now = GetTickCount();
                 if (now - lastNone > 5000) {
                     lastNone = now;
-                    NW_LOG(L"raimv%d: живых тиммейтов нет. скан 64 блоков: павнов %d, врагов %d, команды t0=%d/%d t1=%d/%d t2=%d/%d t3=%d/%d др=%d/%d (павнов/живых), local hp=%d ls=%d team=%d",
+                    NW_LOG(L"raimv%d: живых тиммейтов нет. павнов %d, врагов %d, t0=%d/%d t1=%d/%d t2=%d/%d t3=%d/%d др=%d/%d (павнов/живых), hp-аномалий %d, тиммейты hp:[%d %d %d %d], local hp=%d ls=%d team=%d",
                            raimMode, stats.pawns, stats.enemies,
                            stats.teamPawns[0], stats.teamAlive[0],
                            stats.teamPawns[1], stats.teamAlive[1],
                            stats.teamPawns[2], stats.teamAlive[2],
                            stats.teamPawns[3], stats.teamAlive[3],
                            stats.teamPawns[4], stats.teamAlive[4],
+                           stats.hpAnomalies,
+                           stats.teammateHpSamples[0], stats.teammateHpSamples[1],
+                           stats.teammateHpSamples[2], stats.teammateHpSamples[3],
                            health, mem::Read<uint8_t>(localPlayer + off.m_lifeState),
                            static_cast<int>(localTeam));
 
@@ -518,8 +529,13 @@ void RunFeatureLoop() {
                             mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerController);
                         const uintptr_t ctx = controller
                             ? mem::Read<uintptr_t>(controller + off.m_CommandContext) : 0;
-                        if (!ctx) {
-                            NW_LOG(L"test: контроллер или m_CommandContext не читаются");
+                        if (!controller) {
+                            NW_LOG(L"test: контроллер не читается (dwLocalPlayerController=0x%X)",
+                                   static_cast<unsigned>(off.dwLocalPlayerController));
+                        } else if (!ctx) {
+                            NW_LOG(L"test: контроллер=0x%llX, но m_CommandContext=0 (offset 0x%X)",
+                                   static_cast<unsigned long long>(controller),
+                                   static_cast<unsigned>(off.m_CommandContext));
                         } else if (Raimv2ResolveLayout(ctx, mem::Read<float>(viewAnglesPtr),
                                                        mem::Read<float>(viewAnglesPtr + 4))) {
                             NW_LOG(L"test: раскладка user cmd найдена: ring=0x%X seq=0x%X pb=0x%X base=0x%X msg=0x%X ang=0x%X",
