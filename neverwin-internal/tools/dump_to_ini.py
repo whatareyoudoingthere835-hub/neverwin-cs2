@@ -35,6 +35,7 @@ CLASS_KEYS = {
     "C_BaseModelEntity":      ("m_vecViewOffset",),
     "CGameSceneNode":         ("m_vecAbsOrigin",),
     "C_BasePlayerPawn":       ("m_pCameraServices", "m_pWeaponServices"),
+    "CBasePlayerController":  ("m_CommandContext",),
     "CPlayer_CameraServices": ("m_vecCsViewPunchAngle",),
     "CPlayer_WeaponServices": ("m_hActiveWeapon",),
     "C_BasePlayerWeapon":     ("m_iClip1",),

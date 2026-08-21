@@ -35,6 +35,9 @@ namespace offsets {
         std::uintptr_t m_pCameraServices = 0x1240; // CPlayer_CameraServices*
         std::uintptr_t m_pWeaponServices = 0x1208; // CPlayer_WeaponServices*
 
+        // --- CBasePlayerController: контекст команд (канал углов F1/F2) ---
+        std::uintptr_t m_CommandContext = 0x608;  // CCommandContext* (командное кольцо)
+
         // --- CPlayer_CameraServices: визуальный панч отдачи ---
         // (замена m_aimPunchAngle — поле переехало из павна в камеру)
         std::uintptr_t m_vecCsViewPunchAngle = 0x48; // QAngle (pitch, yaw)

@@ -12,91 +12,43 @@
 #include <cfloat>
 
 // ============================================================================
-// Канал записи углов: CSGOInput::CreateMove (vtable 5), схема quintcs2.
+// Канал записи углов: CSGOInput::CreateMove (vtable 5), как в quintcs2.
 //
 // Почему так: CS2 каждый тик переписывает dwViewAngles из юзеркоманды —
-// писать напрямую во viewAngles из фонового потока значит гоняться с игрой
-// (у нас так F1 и не работал). quint пишет углы в текущий user cmd внутри
-// CreateMove: прогнал оригинал (игра собрала cmd), потом переписал углы в
-// базовой команде — и игра использует их весь тик.
+// писать напрямую во viewAngles из фонового потока значит гоняться с игрой.
+// Правильно: после оригинала CreateMove переписать углы в текущей
+// юзеркоманде — игра использует их весь тик.
 //
-// Цепочка: dwCSGOInput -> vtable[5] CreateMove -> после оригинала:
-//   dwLocalPlayerController -> controller
-//   controller -> GetCmdManager (сигнатура quint) -> manager
-//   cmd = manager + (sequence % 150) * 0x98          // кольцо команд
-//   pb = cmd + pbOff -> base_cmd = pb + baseOff      // CUserCmdBasePB
-//   view_angles msg = base_cmd + 0x40                // c_msg_q_angle*
-//   msg + 0x18 = QAngle, msg + 0x10 = cached_bits    // OR 7 — углы заданы
+// Цепочка БЕЗ вызовов функций клиента (в v6 был вызов GetCmdManager по
+// сигнатуре quint — сигнатура от их билда, на нашем клиенте матчится мимо,
+// и вызов уводил в мусор):
+//   dwLocalPlayerController -> controller            (из нашего дампа)
+//   controller + m_CommandContext -> CCommandContext (схема, из дампа)
+//   ctx + 0x59A8 = m_sequence, cmd = ctx + (seq%150)*0x98
+//   cmd -> pb (0x10/0x18, рантайм-проба) -> base_cmd (0x28/0x30, проба)
+//   base_cmd + 0x40 = m_view_angles (c_msg_q_angle*)
+//   msg + 0x18 = QAngle, msg + 0x10 = cached_bits (|= 7 — углы заданы)
 //
-// Раскладка (pbOff/baseOff) в публичных исходниках гуляет (в квинте комменты
-// 0x18/0x28, арифметика его же ассертов даёт 0x10/0x30) — поэтому решается
-// РАНТАЙМ-ПРОБОЙ: перебираем варианты, сверяем углы в msg с текущими
-// dwViewAngles, берём ближайший. Победитель логируется.
+// Все шаги — mem::Read с проверкой VirtualQuery, вызовов нет вообще.
+// Раскладка pb/base решается пробой: углы msg сверяются с живыми
+// dwViewAngles, победитель логируется.
 // ============================================================================
 
 namespace {
 
-    using CreateMoveFn     = void (__fastcall*)(void*, int, bool);
-    using GetCmdManagerFn  = uintptr_t (__fastcall*)(uintptr_t controller);
+    using CreateMoveFn = void (__fastcall*)(void*, int, bool);
 
-    CreateMoveFn    g_origCreateMove = nullptr;
-    GetCmdManagerFn g_getCmdManager  = nullptr;
-    uintptr_t       g_clientBase     = 0;
-    uintptr_t       g_viewAnglesPtr  = 0;
-    uintptr_t       g_localPlayerPtr = 0;
+    CreateMoveFn g_origCreateMove = nullptr;
+    uintptr_t    g_clientBase     = 0;
+    uintptr_t    g_viewAnglesPtr  = 0;
+    uintptr_t    g_localPlayerPtr = 0;
 
     // Раскладка протобуфа юзеркоманды (решается пробой, см. выше).
     struct CmdLayout {
-        uint32_t pbOff   = 0;
-        uint32_t baseOff = 0;
+        uint32_t pbOff    = 0;
+        uint32_t baseOff  = 0;
         bool     resolved = false;
     } g_layout;
-
-    // Маскированный скан по образу модуля.
-    uintptr_t FindPatternMasked(uintptr_t base, size_t size,
-                                const uint8_t* bytes, const char* mask, size_t len) {
-        if (!base || !size || len == 0)
-            return 0;
-        for (size_t i = 0; i + len <= size; ++i) {
-            bool ok = true;
-            for (size_t j = 0; j < len; ++j) {
-                if (mask[j] != '?' &&
-                    *reinterpret_cast<const uint8_t*>(base + i + j) != bytes[j]) {
-                    ok = false;
-                    break;
-                }
-            }
-            if (ok)
-                return base + i;
-        }
-        return 0;
-    }
-
-    size_t ModuleSize(uintptr_t base) {
-        const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-        if (!base || dos->e_magic != IMAGE_DOS_SIGNATURE)
-            return 0;
-        const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-        if (nt->Signature != IMAGE_NT_SIGNATURE)
-            return 0;
-        return nt->OptionalHeader.SizeOfImage;
-    }
-
-    // --- GetCmdManager: сигнатура quintcs2 (41 56 41 57 48 83 EC ? 48 8D 54 24) ---
-    void ResolveGetCmdManager() {
-        static const uint8_t kSig[] = {
-            0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x00, 0x48, 0x8D, 0x54, 0x24 };
-        static const char kMask[] = "xxxxxxx?xxxx";
-        const size_t size = ModuleSize(g_clientBase);
-        g_getCmdManager = reinterpret_cast<GetCmdManagerFn>(
-            FindPatternMasked(g_clientBase, size, kSig, kMask, sizeof(kSig)));
-        if (g_getCmdManager) {
-            NW_LOG(L"GetCmdManager: 0x%llX",
-                   static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(g_getCmdManager)));
-        } else {
-            NW_LOG(L"WARNING: GetCmdManager не найден (сигнатура quint) — F1/F2 будут писать во viewAngles.");
-        }
-    }
 
     // --- рантайм-проба раскладки user cmd ---
     bool ResolveLayout(uintptr_t cmd) {
@@ -149,20 +101,20 @@ namespace {
         return false;
     }
 
-    // --- запись углов в текущий user cmd (канал quint) ---
+    // --- запись углов в текущий user cmd (только чтения + запись в хип) ---
     bool WriteAnglesViaCmd(float pitch, float yaw) {
-        const uintptr_t controller = mem::Read<uintptr_t>(g_clientBase + offsets::g.dwLocalPlayerController);
+        const uintptr_t controller =
+            mem::Read<uintptr_t>(g_clientBase + offsets::g.dwLocalPlayerController);
         if (!controller)
             return false;
-        if (!g_getCmdManager)
+
+        const uintptr_t ctx =
+            mem::Read<uintptr_t>(controller + offsets::g.m_CommandContext);
+        if (!ctx)
             return false;
 
-        const uintptr_t manager = g_getCmdManager(controller);
-        if (!manager)
-            return false;
-
-        const int seq = mem::Read<int>(manager + 0x59A8);          // m_sequence
-        const uintptr_t cmd = manager + static_cast<uintptr_t>(seq % 150) * 0x98;
+        const int seq = mem::Read<int>(ctx + 0x59A8); // m_sequence
+        const uintptr_t cmd = ctx + static_cast<uintptr_t>(seq % 150) * 0x98;
 
         if (!g_layout.resolved && !ResolveLayout(cmd))
             return false;
@@ -339,8 +291,7 @@ namespace inhooks {
             return false;
         }
 
-        ResolveGetCmdManager();
-        NW_LOG(L"CreateMove захучен — F1/F2 пишут углы в user cmd.");
+        NW_LOG(L"CreateMove захучен — F1/F2 пишут углы в user cmd (m_CommandContext).");
         return true;
     }
 }

@@ -51,6 +51,7 @@ namespace offsets {
         o.m_vecAbsOrigin    = ReadHex(L"m_vecAbsOrigin",    o.m_vecAbsOrigin);
         o.m_pCameraServices = ReadHex(L"m_pCameraServices", o.m_pCameraServices);
         o.m_pWeaponServices = ReadHex(L"m_pWeaponServices", o.m_pWeaponServices);
+        o.m_CommandContext  = ReadHex(L"m_CommandContext",  o.m_CommandContext);
         o.m_vecCsViewPunchAngle = ReadHex(L"m_vecCsViewPunchAngle", o.m_vecCsViewPunchAngle);
         o.m_hActiveWeapon   = ReadHex(L"m_hActiveWeapon",   o.m_hActiveWeapon);
         o.m_iClip1          = ReadHex(L"m_iClip1",          o.m_iClip1);
