@@ -154,16 +154,17 @@ INSERT оставлен как запасной тоггл меню.
 user cmd:
 
 ```
-dwLocalPlayerController → контроллер → GetCmdManager (сигнатура quint)
-→ cmd = manager + (sequence % 150) * 0x98
+dwLocalPlayerController → контроллер → m_CommandContext (0x608, схема из дампа)
+→ cmd = ctx + (sequence % 150) * 0x98
 → CUserCmdBasePB → m_view_angles (0x40) → QAngle + cached_bits |= 7
 ```
 
+**Вызовов функций клиента нет вообще** — только чтения по оффсетам из дампа.
+В v6 канал шёл через GetCmdManager по сигнатуре quint: сигнатура от их билда,
+на нашем клиенте матчится мимо, и вызов уводил в мусор (краш F1/F2).
 Раскладка протобуфа (`pb/base_cmd` смещения) решается рантайм-пробой:
 варианты сверяются с текущими `dwViewAngles`, победитель логируется
 (`раскладка user cmd: pb=0x.. base_cmd=0x..` в `%TEMP%\neverwin.log`).
-Если канал недоступен (не нашлась глобалка/сигнатура) — фолбэк на прямую
-запись viewAngles, как в старых версиях. Все причины отказа логируются.
 
 ## Оверлей — запасной путь (Vulkan)
 
