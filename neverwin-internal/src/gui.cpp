@@ -3,6 +3,8 @@
 #include "features.hpp"
 #include "log.hpp"
 #include "memory.hpp"
+#include "assets/gui_icons.hpp"
+#include "assets/esp_icons.hpp"
 
 #include "imgui.h"
 #include "backends/imgui_impl_win32.h"
@@ -55,6 +57,7 @@ namespace {
     ResizeFn   g_origResize   = nullptr;
     RelMouseFn g_origRelMouse = nullptr;
     bool  g_imguiReady    = false;
+    ImFont* g_iconFont = nullptr;
     HANDLE g_eventUnhooked = nullptr;
 
     // --- окно игры (EnumWindows: наше, видимое, без владельца) ---
@@ -157,6 +160,15 @@ namespace {
         };
         ImFontConfig cfg{};
         cfg.PixelSnapH = true;
+        cfg.FontDataOwnedByAtlas = false;
+        // Встроенные icon fonts из предоставленного fonts.zip: DLL не зависит
+        // от внешних файлов, что важно при инжекте external loader-ом.
+        g_iconFont = ImGui::GetIO().Fonts->AddFontFromMemoryTTF(
+            const_cast<unsigned char*>(gui_icons_ttf), static_cast<int>(gui_icons_ttf_size),
+            16.0f, &cfg);
+        ImGui::GetIO().Fonts->AddFontFromMemoryTTF(
+            const_cast<unsigned char*>(esp_icons_ttf), static_cast<int>(esp_icons_ttf_size),
+            16.0f, &cfg);
         for (const wchar_t* path : candidates) {
             if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES)
                 continue;
@@ -196,98 +208,95 @@ namespace {
         g_imguiReady = false;
     }
 
-    // --- меню ---
+    // --- меню: Neverwin в visual style MemeSense (sidebar + page cards). ---
     void RenderMenu() {
         if (!gui::g_menuOpen.load())
             return;
 
         const float w = ImGui::GetIO().DisplaySize.x;
         const float h = ImGui::GetIO().DisplaySize.y;
-        ImGui::SetNextWindowSize(ImVec2(520.0f, 430.0f), ImGuiCond_Always);
-        ImGui::SetNextWindowPos(ImVec2((w - 520.0f) * 0.5f, (h - 430.0f) * 0.35f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(760.0f, 500.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowPos(ImVec2((w - 760.0f) * 0.5f, (h - 500.0f) * 0.35f), ImGuiCond_Always);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 5.0f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.055f, 0.06f, 0.075f, 1.0f));
+        ImGui::Begin("NEVERWIN", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar);
 
-        ImGui::Begin("NEVERWIN", nullptr,
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                     ImGuiWindowFlags_NoSavedSettings);
+        static int page = 0;
+        const char* pages[] = { "Combat", "Movement", "Misc", "Settings" };
+        const ImVec4 accent(0.94f, 0.16f, 0.25f, 1.0f);
+        const float sidebarWidth = 180.0f;
 
-        ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.65f, 1.0f),
-                           "professional software for losing professionally");
-        ImGui::Separator();
-
-        if (ImGui::BeginTabBar("neverwin_tabs")) {
-            if (ImGui::BeginTabItem("Combat")) {
-                bool aimEnabled = g_features.reverseAimEnabled.load();
-                if (ImGui::Checkbox("Reverse aim enabled [F1]", &aimEnabled))
-                    g_features.reverseAimEnabled.store(aimEnabled);
-                int modeIndex = g_features.reverseAimMode.load() - 1;
-                const char* raimItems[] = { "raimv1", "raimv2", "test" };
-                if (ImGui::Combo("Reverse aim mode", &modeIndex, raimItems, 3))
-                    g_features.reverseAimMode.store(modeIndex + 1);
-                const int raim = modeIndex + 1;
-                if (raim == 1) {
-                    float speed = g_features.reverseAimSpeed.load();
-                    if (ImGui::SliderFloat("Aim speed (deg/s)", &speed, 30.0f, 2160.0f, "%.0f"))
-                        g_features.reverseAimSpeed.store(speed);
-                    float smooth = g_features.reverseAimSmooth.load();
-                    if (ImGui::SliderFloat("Aim smooth (ms)", &smooth, 0.0f, 500.0f, "%.0f"))
-                        g_features.reverseAimSmooth.store(smooth);
-                    float prediction = g_features.reverseAimPrediction.load();
-                    if (ImGui::SliderFloat("Position prediction (s)", &prediction, 0.0f, 0.35f, "%.3f"))
-                        g_features.reverseAimPrediction.store(prediction);
-                    ImGui::TextDisabled("Speed is turn rate, not mouse travel distance");
-                }
-                if (raim == 3)
-                    ImGui::TextDisabled("test: usercmd channel diagnostic");
-
-                bool v = g_features.antiAimless.load();
-                if (ImGui::Checkbox("Antiaimless [F2]", &v))
-                    g_features.antiAimless.store(v);
-                float spin = g_features.spinSpeed.load();
-                if (ImGui::SliderFloat("Spin speed", &spin, 0.0f, 10.0f, "x%.0f"))
-                    g_features.spinSpeed.store(spin);
-
-                bool rage = g_features.ragebot.load();
-                if (ImGui::Checkbox("Nonagon Ragebot [F6]", &rage))
-                    g_features.ragebot.store(rage);
-                if (rage) {
-                    bool autoFire = g_features.rageAutoFire.load();
-                    if (ImGui::Checkbox("Auto fire / trigger", &autoFire)) g_features.rageAutoFire.store(autoFire);
-                    bool resolver = g_features.resolver.load();
-                    if (ImGui::Checkbox("Resolver", &resolver)) g_features.resolver.store(resolver);
-                    int fov = g_features.rageFov.load();
-                    if (ImGui::SliderInt("Rage FOV", &fov, 1, 180)) g_features.rageFov.store(fov);
-                }
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Movement")) {
-                bool bhop = g_features.bhop.load();
-                if (ImGui::Checkbox("Auto bhop [F4]", &bhop)) g_features.bhop.store(bhop);
-                ImGui::TextDisabled("Hold SPACE to jump automatically on landing.");
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Misc")) {
-                ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1.0f), "tg: @fkfwj");
-                ImGui::Separator();
-                ImGui::TextDisabled("More misc features coming later.");
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Settings")) {
-                bool v = g_features.visualRecoil.load();
-                if (ImGui::Checkbox("Visual recoil x4 [F3]", &v)) g_features.visualRecoil.store(v);
-                v = g_features.gamesense.load();
-                if (ImGui::Checkbox("Gamesense [F5]", &v)) g_features.gamesense.store(v);
-                ImGui::Separator();
-                const uintptr_t base = g_state.clientBase.load();
-                ImGui::Text("client.dll: 0x%llX", static_cast<unsigned long long>(base));
-                ImGui::Text("Local: 0x%llX (hp %d, team %d)", static_cast<unsigned long long>(g_state.localPlayer.load()), g_state.localHealth.load(), g_state.localTeam.load());
-                if (ImGui::Button("Detach / unload DLL", ImVec2(-1, 0))) gui::g_unloadRequested.store(true);
-                ImGui::TextDisabled("v%d | P/INSERT menu | END unload", NW_VERSION);
-                ImGui::EndTabItem();
-            }
-            ImGui::EndTabBar();
+        ImGui::BeginChild("##nw_sidebar", ImVec2(sidebarWidth, 0), false);
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        const ImVec2 sidePos = ImGui::GetWindowPos();
+        draw->AddRectFilled(sidePos, ImVec2(sidePos.x + sidebarWidth, sidePos.y + 500.0f),
+                            ImGui::GetColorU32(ImVec4(0.045f, 0.048f, 0.06f, 1.0f)));
+        ImGui::SetCursorPos(ImVec2(24, 28));
+        ImGui::TextColored(accent, "NEVER"); ImGui::SameLine(0, 0); ImGui::Text("WIN");
+        ImGui::SetCursorPosX(24); ImGui::TextDisabled("premium internal");
+        ImGui::SetCursorPosY(98);
+        for (int i = 0; i < 4; ++i) {
+            ImGui::PushStyleColor(ImGuiCol_Header, i == page ? ImVec4(accent.x, accent.y, accent.z, .18f) : ImVec4(0,0,0,0));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(accent.x, accent.y, accent.z, .12f));
+            ImGui::SetCursorPosX(12);
+            if (ImGui::Selectable(pages[i], i == page, 0, ImVec2(156, 38))) page = i;
+            ImGui::PopStyleColor(2);
         }
+        ImGui::SetCursorPos(ImVec2(24, 455));
+        ImGui::TextDisabled("tg: @fkfwj");
+        ImGui::EndChild();
 
+        ImGui::SameLine(0, 0);
+        ImGui::BeginChild("##nw_content", ImVec2(0, 0), false);
+        ImGui::SetCursorPos(ImVec2(28, 28));
+        ImGui::TextColored(accent, "%s", pages[page]);
+        ImGui::Separator();
+        ImGui::SetCursorPosX(28);
+        ImGui::BeginChild("##nw_page", ImVec2(-28, -36), false);
+
+        if (page == 0) {
+            bool enabled = g_features.reverseAimEnabled.load();
+            if (ImGui::Checkbox("Reverse aim enabled [F1]", &enabled)) g_features.reverseAimEnabled.store(enabled);
+            int mode = g_features.reverseAimMode.load() - 1;
+            const char* modes[] = { "raimv1", "raimv2", "test" };
+            if (ImGui::Combo("Reverse aim mode", &mode, modes, 3)) g_features.reverseAimMode.store(mode + 1);
+            float speed = g_features.reverseAimSpeed.load();
+            if (ImGui::SliderFloat("Aim speed (deg/s)", &speed, 30.f, 2160.f, "%.0f")) g_features.reverseAimSpeed.store(speed);
+            float smooth = g_features.reverseAimSmooth.load();
+            if (ImGui::SliderFloat("Aim smooth (ms)", &smooth, 0.f, 500.f, "%.0f")) g_features.reverseAimSmooth.store(smooth);
+            float pred = g_features.reverseAimPrediction.load();
+            if (ImGui::SliderFloat("Position prediction (s)", &pred, 0.f, .35f, "%.3f")) g_features.reverseAimPrediction.store(pred);
+            ImGui::Spacing(); ImGui::Separator();
+            bool aa = g_features.antiAimless.load();
+            if (ImGui::Checkbox("Antiaimless [F2]", &aa)) g_features.antiAimless.store(aa);
+            float spin = g_features.spinSpeed.load();
+            if (ImGui::SliderFloat("Spin speed", &spin, 0.f, 10.f, "x%.0f")) g_features.spinSpeed.store(spin);
+            bool rage = g_features.ragebot.load();
+            if (ImGui::Checkbox("Nonagon Ragebot [F6]", &rage)) g_features.ragebot.store(rage);
+        } else if (page == 1) {
+            bool bhop = g_features.bhop.load();
+            if (ImGui::Checkbox("Auto bhop [F4]", &bhop)) g_features.bhop.store(bhop);
+            ImGui::TextDisabled("Usercmd bhop foundation is being ported.");
+        } else if (page == 2) {
+            ImGui::TextColored(accent, "tg: @fkfwj");
+            ImGui::TextDisabled("More features coming soon.");
+        } else {
+            bool recoil = g_features.visualRecoil.load();
+            if (ImGui::Checkbox("Visual recoil x4 [F3]", &recoil)) g_features.visualRecoil.store(recoil);
+            bool gs = g_features.gamesense.load();
+            if (ImGui::Checkbox("Gamesense [F5]", &gs)) g_features.gamesense.store(gs);
+            ImGui::Separator();
+            ImGui::Text("client.dll: 0x%llX", static_cast<unsigned long long>(g_state.clientBase.load()));
+            ImGui::Text("Local HP: %d | Team: %d", g_state.localHealth.load(), g_state.localTeam.load());
+            if (ImGui::Button("Detach / unload DLL", ImVec2(-1, 36))) gui::g_unloadRequested.store(true);
+        }
+        ImGui::EndChild();
+        ImGui::EndChild();
         ImGui::End();
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar(2);
     }
 
     // --- хук Present: рисуем меню перед отдачей кадра ---
