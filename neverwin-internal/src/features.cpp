@@ -586,6 +586,15 @@ void RunFeatureLoop() {
         const uintptr_t localPlayer = mem::Read<uintptr_t>(localPlayerPtr);
         const uintptr_t localController =
             mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerController);
+        static bool userCmdRuntimeLogged = false;
+        if (!userCmdRuntimeLogged && userCmdPatterns.getUserCmdBase && localController) {
+            userCmdRuntimeLogged = true;
+            const usercmd_probe::RuntimeInfo runtime =
+                usercmd_probe::InspectRuntime(localController, userCmdPatterns);
+            NW_LOG(L"usercmd runtime: base=0x%llX sequence=%d (%s)",
+                   static_cast<unsigned long long>(runtime.base), runtime.sequence,
+                   runtime.valid ? L"base verified" : L"base/sequence unavailable");
+        }
         uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
         g_state.localPlayer.store(localPlayer);
         if (!localPlayer || !entityList)

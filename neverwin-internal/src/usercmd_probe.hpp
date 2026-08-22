@@ -1,5 +1,6 @@
 #pragma once
 #include "pch.h"
+#include "memory.hpp"
 
 // Минимальный read-only probe usercmd-пути Velocity. На этом этапе мы только
 // ищем функции в текущем client.dll и НИЧЕГО не вызываем/не меняем в игре.
@@ -44,6 +45,32 @@ namespace usercmd_probe {
         if (!callInstruction || *reinterpret_cast<const uint8_t*>(callInstruction) != 0xE8) return 0;
         const int32_t displacement = *reinterpret_cast<const int32_t*>(callInstruction + 1);
         return callInstruction + 5 + displacement;
+    }
+
+    struct RuntimeInfo {
+        uintptr_t base = 0;
+        int sequence = 0;
+        bool valid = false;
+    };
+
+    // Velocity calls get_usercmd_base(controller), then reads sequence at
+    // +0x5910. This remains read-only and is logged before any future command
+    // write is enabled.
+    inline RuntimeInfo InspectRuntime(uintptr_t localController, const Patterns& patterns) {
+        RuntimeInfo out{};
+        if (!localController || !patterns.getUserCmdBase)
+            return out;
+        using GetUserCmdBaseFn = uintptr_t(__fastcall*)(uintptr_t);
+        const uintptr_t base = reinterpret_cast<GetUserCmdBaseFn>(patterns.getUserCmdBase)(localController);
+        if (!base || !mem::IsValidPtr(reinterpret_cast<const void*>(base + 0x5910), sizeof(int)))
+            return out;
+        const int sequence = mem::Read<int>(base + 0x5910);
+        if (sequence <= 0 || sequence > 10000000)
+            return out;
+        out.base = base;
+        out.sequence = sequence;
+        out.valid = true;
+        return out;
     }
 
     inline Patterns Scan() {
