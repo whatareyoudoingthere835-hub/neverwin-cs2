@@ -95,8 +95,20 @@ namespace usercmd_probe {
         static const uint8_t kUtlPush[] = { 0xE8,0,0,0,0,0x4C,0x8B,0xD0,0x45,0x8B,0x4A,0x10 };
         static const char kUtlPushMask[] = "x????xxxxxxx";
 
-        if (const uintptr_t found = FindBytes(client, kGetCmd, kGetCmdMask, sizeof(kGetCmd)))
+        if (const uintptr_t found = FindBytes(client, kGetCmd, kGetCmdMask, sizeof(kGetCmd))) {
             out.getUserCmd = ResolveRelativeCall(found + 8);
+        } else {
+            // Valve changed the four bytes before the stable RCX load in the
+            // current client. Keep the identifying call context, but only use
+            // this fallback for read-only probing until runtime validation.
+            static const uint8_t kGetCmdRelaxed[] = {
+                0x49,0x8B,0x4F,0x10,0xE8,0,0,0,0,0x48,0x85,0xC0,0x74,0x19
+            };
+            static const char kGetCmdRelaxedMask[] = "xxxxx????xxxxx";
+            if (const uintptr_t found = FindBytes(client, kGetCmdRelaxed, kGetCmdRelaxedMask,
+                                                   sizeof(kGetCmdRelaxed)))
+                out.getUserCmd = ResolveRelativeCall(found + 4);
+        }
         if (const uintptr_t found = FindBytes(client, kGetCmdBase, kGetCmdBaseMask, sizeof(kGetCmdBase)))
             out.getUserCmdBase = ResolveRelativeCall(found + 4);
         if (const uintptr_t found = FindBytes(client, kSubtickAlloc, kSubtickAllocMask, sizeof(kSubtickAlloc)))
