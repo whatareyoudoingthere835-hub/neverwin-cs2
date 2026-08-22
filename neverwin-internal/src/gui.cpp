@@ -174,10 +174,15 @@ namespace {
                 continue;
             char utf8[MAX_PATH * 2]{};
             WideCharToMultiByte(CP_UTF8, 0, path, -1, utf8, sizeof(utf8), nullptr, nullptr);
-            ImGui::GetIO().Fonts->AddFontFromFileTTF(utf8, 15.0f, &cfg,
-                                                     ImGui::GetIO().Fonts->GetGlyphRangesCyrillic());
-            NW_LOG(L"шрифт меню: %s", path);
-            return;
+            ImFont* textFont = ImGui::GetIO().Fonts->AddFontFromFileTTF(
+                utf8, 15.0f, &cfg, ImGui::GetIO().Fonts->GetGlyphRangesCyrillic());
+            if (textFont) {
+                // Icon font добавляется первым, поэтому без явного FontDefault
+                // ImGui пытался рисовать весь русский/латинский текст иконками.
+                ImGui::GetIO().FontDefault = textFont;
+                NW_LOG(L"шрифт меню: %s", path);
+                return;
+            }
         }
         NW_LOG(L"WARNING: системный шрифт не найден — меню будет с квадратами.");
     }
