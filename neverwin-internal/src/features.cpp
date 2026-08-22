@@ -600,6 +600,15 @@ void RunFeatureLoop() {
             NW_LOG(L"usercmd runtime: base=0x%llX sequence=%d (%s)",
                    static_cast<unsigned long long>(runtime.base), runtime.sequence,
                    runtime.valid ? L"base verified" : L"waiting for command context");
+            // Phase 2 remains read-only: use the verified Velocity base as
+            // the input to existing ring/protobuf discovery. This replaces
+            // the stale controller.m_CommandContext path.
+            if (runtime.valid) {
+                const bool layoutFound = Raimv2ResolveLayout(runtime.base,
+                    mem::Read<float>(viewAnglesPtr), mem::Read<float>(viewAnglesPtr + 4));
+                NW_LOG(L"usercmd layout probe: %s (best angle delta %.2f)",
+                       layoutFound ? L"verified" : L"not found", g_lastProbeScore);
+            }
         }
         uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
         g_state.localPlayer.store(localPlayer);
