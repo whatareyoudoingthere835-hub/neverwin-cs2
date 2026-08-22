@@ -26,11 +26,10 @@ namespace {
 
     // --- Хоткеи. Маппинг соответствует оригинальному internal.txt. ---
     void HandleHotkeys() {
-        // F1 циклит: выкл -> raimv1 -> raimv2 -> test -> выкл.
-        if (GetAsyncKeyState(VK_F1) & 1) {
-            const int m = g_features.reverseAim.load();
-            g_features.reverseAim.store((m + 1) % 4);
-        }
+        // F1 только включает/выключает выбранный режим. Сам режим меняется
+        // исключительно вручную из меню, чтобы клавиша не перескакивала v1/v2.
+        if (GetAsyncKeyState(VK_F1) & 1)
+            g_features.reverseAimEnabled.store(!g_features.reverseAimEnabled.load());
         if (GetAsyncKeyState(VK_F2) & 1) g_features.antiAimless.store(!g_features.antiAimless.load());
         if (GetAsyncKeyState(VK_F3) & 1) g_features.visualRecoil.store(!g_features.visualRecoil.load());
         if (GetAsyncKeyState(VK_F4) & 1) g_features.bhop.store(!g_features.bhop.load());
@@ -247,10 +246,11 @@ namespace {
 
     bool FindTeammateTarget(uintptr_t localPlayer, uintptr_t entityList,
                             uint8_t localTeam, ent::Vector3& outOrigin,
-                            int& outHealth,
+                            ent::Vector3& outVelocity, int& outHealth,
                             int& aliveCount, int& totalCount,
                             TeamScanStats& stats) {
         ent::Vector3 bestOrigin{};
+        ent::Vector3 bestVelocity{};
         float bestDist2 = FLT_MAX;
         int bestHealth = 0;
         bool found = false;
@@ -337,6 +337,7 @@ namespace {
             if (d2 < bestDist2) {
                 bestDist2 = d2;
                 bestOrigin = player.origin;
+                bestVelocity = player.velocity;
                 bestHealth = player.health;
                 found = true;
             }
@@ -365,6 +366,7 @@ namespace {
                 now - cache.at < 250) {
                 if (cache.found) {
                     outOrigin = cache.origin;
+                    outVelocity = {};
                     outHealth = cache.health;
                     ++aliveCount;
                     return true;
@@ -422,6 +424,7 @@ namespace {
 
                 if (cache.found) {
                     outOrigin = cache.origin;
+                    outVelocity = {};
                     outHealth = cache.health;
                     ++aliveCount;
                     NW_LOG(L"raim: controller->pawn не резолвится; использован обратный pawn->m_hController scanner (проверено %d, связей %d, тиммейтов %d).",
@@ -434,6 +437,7 @@ namespace {
         if (!found)
             return false;
         outOrigin = bestOrigin;
+        outVelocity = bestVelocity;
         outHealth = bestHealth;
         return true;
     }
@@ -727,20 +731,24 @@ void RunFeatureLoop() {
 
         // --- 4a. Реверс аим (F1): raimv1 / raimv2 / test. ---
         // test — канал как у андромеды: юзеркоманда + страховка viewAngles.
-        const int raimMode = g_features.reverseAim.load();
+        const int raimMode = g_features.reverseAimEnabled.load()
+            ? g_features.reverseAimMode.load() : 0;
         if (raimMode != 0) {
             ent::Vector3 targetOrigin{};
+            ent::Vector3 targetVelocity{};
             int targetHealth = 0;
             int aliveCount = 0, totalCount = 0;
             TeamScanStats stats;
             if (FindTeammateTarget(localPlayer, entityList, localTeam,
-                                   targetOrigin, targetHealth,
+                                   targetOrigin, targetVelocity, targetHealth,
                                    aliveCount, totalCount, stats)) {
                 const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
                 if (eye.x != 0.0f || eye.y != 0.0f || eye.z != 0.0f) {
                     // +64 юнита вверх от origin — корпус/голова.
-                    const ent::Vector3 target{ targetOrigin.x, targetOrigin.y,
-                                               targetOrigin.z + 64.0f };
+                    const float prediction = g_features.reverseAimPrediction.load();
+                    const ent::Vector3 target{ targetOrigin.x + targetVelocity.x * prediction,
+                                               targetOrigin.y + targetVelocity.y * prediction,
+                                               targetOrigin.z + targetVelocity.z * prediction + 64.0f };
                     ent::Vector2 targetAngles = ent::CalcAngles(eye, target);
                     ent::NormalizeAngles(targetAngles.x, targetAngles.y);
                     const ent::Vector2 currentAngles = mem::Read<ent::Vector2>(viewAnglesPtr);

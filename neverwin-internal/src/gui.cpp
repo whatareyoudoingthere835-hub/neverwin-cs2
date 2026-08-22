@@ -216,10 +216,14 @@ namespace {
 
         if (ImGui::BeginTabBar("neverwin_tabs")) {
             if (ImGui::BeginTabItem("Combat")) {
-                int raim = g_features.reverseAim.load();
-                const char* raimItems[] = { "Off", "raimv1", "raimv2", "test" };
-                if (ImGui::Combo("Reverse aim [F1]", &raim, raimItems, 4))
-                    g_features.reverseAim.store(raim);
+                bool aimEnabled = g_features.reverseAimEnabled.load();
+                if (ImGui::Checkbox("Reverse aim enabled [F1]", &aimEnabled))
+                    g_features.reverseAimEnabled.store(aimEnabled);
+                int modeIndex = g_features.reverseAimMode.load() - 1;
+                const char* raimItems[] = { "raimv1", "raimv2", "test" };
+                if (ImGui::Combo("Reverse aim mode", &modeIndex, raimItems, 3))
+                    g_features.reverseAimMode.store(modeIndex + 1);
+                const int raim = modeIndex + 1;
                 if (raim == 1) {
                     float speed = g_features.reverseAimSpeed.load();
                     if (ImGui::SliderFloat("Aim speed (deg/s)", &speed, 30.0f, 2160.0f, "%.0f"))
@@ -227,6 +231,9 @@ namespace {
                     float smooth = g_features.reverseAimSmooth.load();
                     if (ImGui::SliderFloat("Aim smooth (ms)", &smooth, 0.0f, 500.0f, "%.0f"))
                         g_features.reverseAimSmooth.store(smooth);
+                    float prediction = g_features.reverseAimPrediction.load();
+                    if (ImGui::SliderFloat("Position prediction (s)", &prediction, 0.0f, 0.35f, "%.3f"))
+                        g_features.reverseAimPrediction.store(prediction);
                     ImGui::TextDisabled("Speed is turn rate, not mouse travel distance");
                 }
                 if (raim == 3)

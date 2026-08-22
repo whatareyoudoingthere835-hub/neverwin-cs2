@@ -7,11 +7,14 @@
 struct Features {
     // F1 — реверс аим: 0=выкл, 1=raimv1 (прямая запись viewAngles),
     // 2=raimv2 (запись в юзеркоманду + фолбэк на прямую запись).
-    std::atomic<int> reverseAim{0};
+    // F1 только включает/выключает выбранный в меню режим.
+    std::atomic<bool> reverseAimEnabled{false};
+    std::atomic<int> reverseAimMode{1}; // 1=raimv1, 2=raimv2, 3=test
     // Поворот F1 задаётся во времени, а не длиной движения мыши.
     // speed — максимум градусов в секунду, smooth — время сглаживания в мс.
     std::atomic<float> reverseAimSpeed{720.0f};
     std::atomic<float> reverseAimSmooth{0.0f};
+    std::atomic<float> reverseAimPrediction{0.12f}; // секунд вперёд по velocity цели
     std::atomic<bool> antiAimless{false};  // F2 — взгляд в пол при видимом враге
     std::atomic<float> spinSpeed{1.0f};    // скорость спинбота F2: 0..10 (множитель)
     std::atomic<bool> visualRecoil{false}; // F3 — отдача x4

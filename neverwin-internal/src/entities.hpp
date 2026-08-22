@@ -165,6 +165,7 @@ namespace ent {
         bool dormant = true;
         bool immune = false;
         Vector3 origin{};
+        Vector3 velocity{};
 
         bool HasController() const { return controller != 0; }
         bool HasPawn() const { return pawn != 0; }
@@ -227,6 +228,7 @@ namespace ent {
         out.health = mem::Read<int>(out.pawn + off.m_iHealth);
         out.lifeState = mem::Read<uint8_t>(out.pawn + off.m_lifeState);
         out.immune = mem::Read<uint8_t>(out.pawn + off.m_bGunGameImmunity) != 0;
+        out.velocity = mem::Read<Vector3>(out.pawn + off.m_vecAbsVelocity);
         out.sceneNode = mem::Read<uintptr_t>(out.pawn + off.m_pGameSceneNode);
         if (out.sceneNode) {
             out.dormant = mem::Read<uint8_t>(out.sceneNode + off.m_bDormant) != 0;
