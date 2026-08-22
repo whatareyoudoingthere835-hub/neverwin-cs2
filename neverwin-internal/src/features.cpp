@@ -1017,9 +1017,11 @@ void RunFeatureLoop() {
                         // под прицелом, либо пока угловая ошибка после предыдущего
                         // прохода не станет практически нулевой. Поэтому первый
                         // кадр захвата цели только наводит, следующий уже стреляет.
+                        // Стреляем только когда сам движок подтвердил pawn под
+                        // crosshair. Старый FOV fallback мог нажать fire по
+                        // цели за стеной после одного лишь поворота камеры.
                         const bool triggerConfirmed =
-                            ent::IsCrosshairOnPawn(localPlayer, entityList, targetPlayer->GetPawn()) ||
-                            target.fov <= 1.5f;
+                            ent::IsCrosshairOnPawn(localPlayer, entityList, targetPlayer->GetPawn());
 
                         static uint32_t lastRageLog = 0;
                         const uint32_t now = GetTickCount();
