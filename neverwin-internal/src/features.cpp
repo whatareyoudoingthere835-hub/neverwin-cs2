@@ -5,6 +5,7 @@
 #include "log.hpp"
 #include "memory.hpp"
 #include "offsets.hpp"
+#include "usercmd_probe.hpp"
 #include "nonagon/ragebot.hpp"
 #include "nonagon/resolver.hpp"
 #include "nonagon/cs2_adapter.hpp"
@@ -552,6 +553,14 @@ void RunFeatureLoop() {
            static_cast<unsigned long long>(off.dwEntityList),
            static_cast<unsigned long long>(off.dwLocalPlayerPawn),
            static_cast<unsigned long long>(off.dwViewAngles));
+
+    const usercmd_probe::Patterns userCmdPatterns = usercmd_probe::Scan();
+    NW_LOG(L"usercmd probe: get_cmd_base=0x%llX get_cmd=0x%llX subtick_alloc=0x%llX vector_push=0x%llX (%s)",
+           static_cast<unsigned long long>(userCmdPatterns.getUserCmdBase),
+           static_cast<unsigned long long>(userCmdPatterns.getUserCmd),
+           static_cast<unsigned long long>(userCmdPatterns.subtickMoveAlloc),
+           static_cast<unsigned long long>(userCmdPatterns.utlVectorPush),
+           userCmdPatterns.ReadyForRead() ? L"read path found" : L"patterns missing");
 
     const uintptr_t entityListPtr  = clientBase + off.dwEntityList;
     const uintptr_t localPlayerPtr = clientBase + off.dwLocalPlayerPawn;
