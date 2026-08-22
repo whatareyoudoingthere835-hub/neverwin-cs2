@@ -586,14 +586,20 @@ void RunFeatureLoop() {
         const uintptr_t localPlayer = mem::Read<uintptr_t>(localPlayerPtr);
         const uintptr_t localController =
             mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerController);
-        static bool userCmdRuntimeLogged = false;
-        if (!userCmdRuntimeLogged && userCmdPatterns.getUserCmdBase && localController) {
-            userCmdRuntimeLogged = true;
+        // Command context может появиться через несколько секунд после DLL.
+        // Не фиксируем единственный ранний null как окончательную неудачу.
+        static bool userCmdRuntimeReady = false;
+        static DWORD lastUserCmdRuntimeProbe = 0;
+        const DWORD nowForUserCmd = GetTickCount();
+        if (!userCmdRuntimeReady && userCmdPatterns.getUserCmdBase && localController &&
+            nowForUserCmd - lastUserCmdRuntimeProbe >= 3000) {
+            lastUserCmdRuntimeProbe = nowForUserCmd;
             const usercmd_probe::RuntimeInfo runtime =
                 usercmd_probe::InspectRuntime(localController, userCmdPatterns);
+            userCmdRuntimeReady = runtime.valid;
             NW_LOG(L"usercmd runtime: base=0x%llX sequence=%d (%s)",
                    static_cast<unsigned long long>(runtime.base), runtime.sequence,
-                   runtime.valid ? L"base verified" : L"base/sequence unavailable");
+                   runtime.valid ? L"base verified" : L"waiting for command context");
         }
         uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
         g_state.localPlayer.store(localPlayer);
