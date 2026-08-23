@@ -73,6 +73,19 @@ namespace usercmd_probe {
         return out;
     }
 
+    struct InputCandidate {
+        uintptr_t address = 0;
+        int commandNumber = 0;
+        uintptr_t commandRing = 0;
+        uintptr_t currentCmd = 0;
+        float inputPitch = 0.0f;
+        float inputYaw = 0.0f;
+        float inputAngleDelta = 99999.0f;
+        float commandPitch = 0.0f;
+        float commandYaw = 0.0f;
+        float commandAngleDelta = 99999.0f;
+    };
+
     struct InputProbe {
         uintptr_t input = 0;
         uintptr_t vtable = 0;
@@ -80,6 +93,7 @@ namespace usercmd_probe {
         uintptr_t inputPattern = 0;
         uintptr_t relatedCall = 0;
         uintptr_t createMovePattern = 0;
+        InputCandidate candidates[3]{};
         int commandNumber = 0;
         uintptr_t commandRing = 0;
         uintptr_t currentCmd = 0;
@@ -101,25 +115,43 @@ namespace usercmd_probe {
             out.valid = out.methods[0] != 0;
         }
 
-        // cs2-sdk build 14175 layout, probed against the current object from
-        // dwCSGOInput. This is still read-only: a matching view angle proves
-        // the ring/stride before future code ever touches buttons.
-        if (out.input) {
-            out.commandNumber = mem::Read<int>(out.input + 0xB50);
-            out.commandRing = mem::Read<uintptr_t>(out.input + 0xB58);
-            if (out.commandRing && out.commandNumber > 0) {
+        // cs2-sdk header has build 14175. Compare all plausible object roots
+        // read-only against live view angles before trusting its B50/B58 fields.
+        const uintptr_t directGlobal = clientBase + 0x23BFB20;
+        const uintptr_t legacyStatic = clientBase + 0x23B95F0;
+        const uintptr_t roots[] = { out.input, directGlobal, legacyStatic };
+        auto angleDelta = [&](float pitch, float yaw) {
+            float dy = std::fabs(yaw - liveYaw);
+            while (dy > 360.0f) dy -= 360.0f;
+            if (dy > 180.0f) dy = 360.0f - dy;
+            return std::fabs(pitch - livePitch) + dy;
+        };
+        for (int n = 0; n < 3; ++n) {
+            auto& candidate = out.candidates[n];
+            candidate.address = roots[n];
+            if (!candidate.address) continue;
+            candidate.inputPitch = mem::Read<float>(candidate.address + 0x688);
+            candidate.inputYaw = mem::Read<float>(candidate.address + 0x68C);
+            candidate.inputAngleDelta = angleDelta(candidate.inputPitch, candidate.inputYaw);
+            candidate.commandNumber = mem::Read<int>(candidate.address + 0xB50);
+            candidate.commandRing = mem::Read<uintptr_t>(candidate.address + 0xB58);
+            if (candidate.commandRing && candidate.commandNumber > 0 && candidate.commandNumber < 10000000) {
                 constexpr int kCommandRingSize = 150;
                 constexpr uintptr_t kCommandStride = 0x440;
-                const int index = out.commandNumber % kCommandRingSize;
-                out.currentCmd = out.commandRing + static_cast<uintptr_t>(index) * kCommandStride;
-                out.commandPitch = mem::Read<float>(out.currentCmd + 0x18);
-                out.commandYaw = mem::Read<float>(out.currentCmd + 0x1C);
-                float yawDelta = std::fabs(out.commandYaw - liveYaw);
-                while (yawDelta > 360.0f) yawDelta -= 360.0f;
-                if (yawDelta > 180.0f) yawDelta = 360.0f - yawDelta;
-                out.angleDelta = std::fabs(out.commandPitch - livePitch) + yawDelta;
+                const int index = candidate.commandNumber % kCommandRingSize;
+                candidate.currentCmd = candidate.commandRing + static_cast<uintptr_t>(index) * kCommandStride;
+                candidate.commandPitch = mem::Read<float>(candidate.currentCmd + 0x18);
+                candidate.commandYaw = mem::Read<float>(candidate.currentCmd + 0x1C);
+                candidate.commandAngleDelta = angleDelta(candidate.commandPitch, candidate.commandYaw);
             }
         }
+        // Preserve candidate 0 in legacy fields for existing diagnostics.
+        out.commandNumber = out.candidates[0].commandNumber;
+        out.commandRing = out.candidates[0].commandRing;
+        out.currentCmd = out.candidates[0].currentCmd;
+        out.commandPitch = out.candidates[0].commandPitch;
+        out.commandYaw = out.candidates[0].commandYaw;
+        out.angleDelta = out.candidates[0].commandAngleDelta;
 
         const HMODULE client = GetModuleHandleW(L"client.dll");
         if (!client) return out;

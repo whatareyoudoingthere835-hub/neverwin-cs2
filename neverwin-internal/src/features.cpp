@@ -578,6 +578,14 @@ void RunFeatureLoop() {
            inputProbe.commandNumber, static_cast<unsigned long long>(inputProbe.commandRing),
            static_cast<unsigned long long>(inputProbe.currentCmd), inputProbe.commandPitch,
            inputProbe.commandYaw, inputProbe.angleDelta);
+    for (int i = 0; i < 3; ++i) {
+        const auto& c = inputProbe.candidates[i];
+        NW_LOG(L"csgo_input candidate[%d]: root=0x%llX inputang=(%.2f,%.2f) inputdelta=%.2f cmdnum=%d ring=0x%llX cmd=0x%llX cmdang=(%.2f,%.2f) cmddelta=%.2f",
+               i, static_cast<unsigned long long>(c.address), c.inputPitch, c.inputYaw,
+               c.inputAngleDelta, c.commandNumber, static_cast<unsigned long long>(c.commandRing),
+               static_cast<unsigned long long>(c.currentCmd), c.commandPitch, c.commandYaw,
+               c.commandAngleDelta);
+    }
 
     const uintptr_t entityListPtr  = clientBase + off.dwEntityList;
     const uintptr_t localPlayerPtr = clientBase + off.dwLocalPlayerPawn;
