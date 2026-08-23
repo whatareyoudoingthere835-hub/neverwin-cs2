@@ -633,6 +633,18 @@ void RunFeatureLoop() {
                     mem::Read<float>(viewAnglesPtr), mem::Read<float>(viewAnglesPtr + 4));
                 NW_LOG(L"usercmd layout probe: %s (best angle delta %.2f)",
                        layoutFound ? L"verified" : L"not found", g_lastProbeScore);
+                // Candidate[1] (client + dwCSGOInput without deref) was the
+                // only root whose +0x688 angles matched live view angles.
+                // Re-read it after a command context exists; at DLL startup
+                // its command number is legitimately still zero.
+                const usercmd_probe::InputProbe refreshed = usercmd_probe::ProbeCSGOInput(
+                    clientBase, mem::Read<float>(viewAnglesPtr), mem::Read<float>(viewAnglesPtr + 4));
+                const auto& input = refreshed.candidates[1];
+                NW_LOG(L"csgo_input runtime candidate[1]: root=0x%llX inputdelta=%.2f cmdnum=%d ring=0x%llX cmd=0x%llX cmdang=(%.2f,%.2f) cmddelta=%.2f",
+                       static_cast<unsigned long long>(input.address), input.inputAngleDelta,
+                       input.commandNumber, static_cast<unsigned long long>(input.commandRing),
+                       static_cast<unsigned long long>(input.currentCmd), input.commandPitch,
+                       input.commandYaw, input.commandAngleDelta);
             }
         }
         uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
