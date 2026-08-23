@@ -79,6 +79,7 @@ namespace usercmd_probe {
         uintptr_t methods[8]{};
         uintptr_t inputPattern = 0;
         uintptr_t relatedCall = 0;
+        uintptr_t createMovePattern = 0;
         bool valid = false;
     };
 
@@ -107,6 +108,14 @@ namespace usercmd_probe {
         out.inputPattern = FindBytes(client, kInputPattern, kInputMask, sizeof(kInputPattern));
         if (const uintptr_t found = FindBytes(client, kRelatedCall, kRelatedCallMask, sizeof(kRelatedCall)))
             out.relatedCall = ResolveRelativeCall(found);
+
+        // Raw Velocity CreateMove locator. Its custom +28~ decode is not
+        // applied yet: v42 reports only the match address before any hook.
+        static const uint8_t kCreateMove[] = {
+            0xFF,0xFF,0xFF,0xFF,0x48,0x8D,0x05,0,0,0,0,0x48,0x89,0x0D,0,0,0,0
+        };
+        static const char kCreateMoveMask[] = "xxxxxxx????xxx????";
+        out.createMovePattern = FindBytes(client, kCreateMove, kCreateMoveMask, sizeof(kCreateMove));
         return out;
     }
 
