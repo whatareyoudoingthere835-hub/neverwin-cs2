@@ -565,7 +565,7 @@ void RunFeatureLoop() {
     const usercmd_probe::InputProbe inputProbe = usercmd_probe::ProbeCSGOInput(
         clientBase, mem::Read<float>(clientBase + off.dwViewAngles),
         mem::Read<float>(clientBase + off.dwViewAngles + 4));
-    NW_LOG(L"csgo_input probe: ptr=0x%llX vtable=0x%llX valid=%s vtbl[0..7]=%llX %llX %llX %llX %llX %llX %llX %llX patterns input=0x%llX related_call=0x%llX create_move_raw=0x%llX cmdnum=%d ring=0x%llX cmd=0x%llX cmdang=(%.2f,%.2f) delta=%.2f",
+    NW_LOG(L"csgo_input probe: ptr=0x%llX slot0=0x%llX valid=%s slots[0..7]=%llX %llX %llX %llX %llX %llX %llX %llX patterns input=0x%llX related_call=0x%llX create_move_raw=0x%llX cmdnum=%d ring=0x%llX cmd=0x%llX cmdang=(%.2f,%.2f) delta=%.2f",
            static_cast<unsigned long long>(inputProbe.input),
            static_cast<unsigned long long>(inputProbe.vtable), inputProbe.valid ? L"yes" : L"no",
            static_cast<unsigned long long>(inputProbe.methods[0]), static_cast<unsigned long long>(inputProbe.methods[1]),

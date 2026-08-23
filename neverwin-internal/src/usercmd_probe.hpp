@@ -107,11 +107,13 @@ namespace usercmd_probe {
         InputProbe out{};
         // dwCSGOInput from the supplied 20 Aug 2026 dump. Read-only only.
         out.input = mem::Read<uintptr_t>(clientBase + 0x23BFB20);
-        if (out.input)
+        // This object is not a conventional vtable object on the current
+        // client. Ghidra shows direct calls through [CCSGOInput + 0x8], so
+        // record the first object slots themselves (no second dereference).
+        if (out.input) {
             out.vtable = mem::Read<uintptr_t>(out.input);
-        if (out.vtable) {
             for (int i = 0; i < 8; ++i)
-                out.methods[i] = mem::Read<uintptr_t>(out.vtable + sizeof(uintptr_t) * i);
+                out.methods[i] = mem::Read<uintptr_t>(out.input + sizeof(uintptr_t) * i);
             out.valid = out.methods[0] != 0;
         }
 
