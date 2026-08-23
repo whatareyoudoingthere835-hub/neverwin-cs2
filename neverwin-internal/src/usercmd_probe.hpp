@@ -80,10 +80,16 @@ namespace usercmd_probe {
         uintptr_t inputPattern = 0;
         uintptr_t relatedCall = 0;
         uintptr_t createMovePattern = 0;
+        int commandNumber = 0;
+        uintptr_t commandRing = 0;
+        uintptr_t currentCmd = 0;
+        float commandPitch = 0.0f;
+        float commandYaw = 0.0f;
+        float angleDelta = 99999.0f;
         bool valid = false;
     };
 
-    inline InputProbe ProbeCSGOInput(uintptr_t clientBase) {
+    inline InputProbe ProbeCSGOInput(uintptr_t clientBase, float livePitch, float liveYaw) {
         InputProbe out{};
         // dwCSGOInput from the supplied 20 Aug 2026 dump. Read-only only.
         out.input = mem::Read<uintptr_t>(clientBase + 0x23BFB20);
@@ -93,6 +99,26 @@ namespace usercmd_probe {
             for (int i = 0; i < 8; ++i)
                 out.methods[i] = mem::Read<uintptr_t>(out.vtable + sizeof(uintptr_t) * i);
             out.valid = out.methods[0] != 0;
+        }
+
+        // cs2-sdk build 14175 layout, probed against the current object from
+        // dwCSGOInput. This is still read-only: a matching view angle proves
+        // the ring/stride before future code ever touches buttons.
+        if (out.input) {
+            out.commandNumber = mem::Read<int>(out.input + 0xB50);
+            out.commandRing = mem::Read<uintptr_t>(out.input + 0xB58);
+            if (out.commandRing && out.commandNumber > 0) {
+                constexpr int kCommandRingSize = 150;
+                constexpr uintptr_t kCommandStride = 0x440;
+                const int index = out.commandNumber % kCommandRingSize;
+                out.currentCmd = out.commandRing + static_cast<uintptr_t>(index) * kCommandStride;
+                out.commandPitch = mem::Read<float>(out.currentCmd + 0x18);
+                out.commandYaw = mem::Read<float>(out.currentCmd + 0x1C);
+                float yawDelta = std::fabs(out.commandYaw - liveYaw);
+                while (yawDelta > 360.0f) yawDelta -= 360.0f;
+                if (yawDelta > 180.0f) yawDelta = 360.0f - yawDelta;
+                out.angleDelta = std::fabs(out.commandPitch - livePitch) + yawDelta;
+            }
         }
 
         const HMODULE client = GetModuleHandleW(L"client.dll");
