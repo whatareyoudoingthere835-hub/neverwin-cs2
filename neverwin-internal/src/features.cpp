@@ -562,6 +562,17 @@ void RunFeatureLoop() {
            static_cast<unsigned long long>(userCmdPatterns.utlVectorPush),
            userCmdPatterns.ReadyForRead() ? L"read path found" : L"patterns missing");
 
+    const usercmd_probe::InputProbe inputProbe = usercmd_probe::ProbeCSGOInput(clientBase);
+    NW_LOG(L"csgo_input probe: ptr=0x%llX vtable=0x%llX valid=%s vtbl[0..7]=%llX %llX %llX %llX %llX %llX %llX %llX patterns input=0x%llX related_call=0x%llX",
+           static_cast<unsigned long long>(inputProbe.input),
+           static_cast<unsigned long long>(inputProbe.vtable), inputProbe.valid ? L"yes" : L"no",
+           static_cast<unsigned long long>(inputProbe.methods[0]), static_cast<unsigned long long>(inputProbe.methods[1]),
+           static_cast<unsigned long long>(inputProbe.methods[2]), static_cast<unsigned long long>(inputProbe.methods[3]),
+           static_cast<unsigned long long>(inputProbe.methods[4]), static_cast<unsigned long long>(inputProbe.methods[5]),
+           static_cast<unsigned long long>(inputProbe.methods[6]), static_cast<unsigned long long>(inputProbe.methods[7]),
+           static_cast<unsigned long long>(inputProbe.inputPattern),
+           static_cast<unsigned long long>(inputProbe.relatedCall));
+
     const uintptr_t entityListPtr  = clientBase + off.dwEntityList;
     const uintptr_t localPlayerPtr = clientBase + off.dwLocalPlayerPawn;
     const uintptr_t viewAnglesPtr  = clientBase + off.dwViewAngles;

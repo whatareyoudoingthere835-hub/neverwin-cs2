@@ -73,6 +73,43 @@ namespace usercmd_probe {
         return out;
     }
 
+    struct InputProbe {
+        uintptr_t input = 0;
+        uintptr_t vtable = 0;
+        uintptr_t methods[8]{};
+        uintptr_t inputPattern = 0;
+        uintptr_t relatedCall = 0;
+        bool valid = false;
+    };
+
+    inline InputProbe ProbeCSGOInput(uintptr_t clientBase) {
+        InputProbe out{};
+        // dwCSGOInput from the supplied 20 Aug 2026 dump. Read-only only.
+        out.input = mem::Read<uintptr_t>(clientBase + 0x23BFB20);
+        if (out.input)
+            out.vtable = mem::Read<uintptr_t>(out.input);
+        if (out.vtable) {
+            for (int i = 0; i < 8; ++i)
+                out.methods[i] = mem::Read<uintptr_t>(out.vtable + sizeof(uintptr_t) * i);
+            out.valid = out.methods[0] != 0;
+        }
+
+        const HMODULE client = GetModuleHandleW(L"client.dll");
+        if (!client) return out;
+        static const uint8_t kInputPattern[] = {
+            0x48,0x8B,0x0D,0,0,0,0,0xE8,0,0,0,0,0x48,0x8B,0xCF,0x4C,0x8B,0xF8
+        };
+        static const char kInputMask[] = "xxx????x????xxxxxx";
+        static const uint8_t kRelatedCall[] = {
+            0xE8,0,0,0,0,0x48,0x8B,0x0D,0,0,0,0,0x45,0x33,0xE4,0x48,0x89,0x44,0x24
+        };
+        static const char kRelatedCallMask[] = "x????xxx????xxxxxxx";
+        out.inputPattern = FindBytes(client, kInputPattern, kInputMask, sizeof(kInputPattern));
+        if (const uintptr_t found = FindBytes(client, kRelatedCall, kRelatedCallMask, sizeof(kRelatedCall)))
+            out.relatedCall = ResolveRelativeCall(found);
+        return out;
+    }
+
     inline Patterns Scan() {
         Patterns out{};
         const HMODULE client = GetModuleHandleW(L"client.dll");
