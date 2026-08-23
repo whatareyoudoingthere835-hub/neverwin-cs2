@@ -622,8 +622,15 @@ void RunFeatureLoop() {
             const usercmd_probe::RuntimeInfo runtime =
                 usercmd_probe::InspectRuntime(localController, userCmdPatterns);
             userCmdRuntimeReady = runtime.valid;
-            NW_LOG(L"usercmd runtime: base=0x%llX sequence=%d (%s)",
+            const float cmdPitch = mem::Read<float>(runtime.command + 0x18);
+            const float cmdYaw = mem::Read<float>(runtime.command + 0x1C);
+            float cmdYawDelta = std::fabs(cmdYaw - mem::Read<float>(viewAnglesPtr + 4));
+            while (cmdYawDelta > 360.0f) cmdYawDelta -= 360.0f;
+            if (cmdYawDelta > 180.0f) cmdYawDelta = 360.0f - cmdYawDelta;
+            const float cmdDelta = std::fabs(cmdPitch - mem::Read<float>(viewAnglesPtr)) + cmdYawDelta;
+            NW_LOG(L"usercmd runtime: base=0x%llX sequence=%d cmd=0x%llX cmdang=(%.2f,%.2f) delta=%.2f (%s)",
                    static_cast<unsigned long long>(runtime.base), runtime.sequence,
+                   static_cast<unsigned long long>(runtime.command), cmdPitch, cmdYaw, cmdDelta,
                    runtime.valid ? L"base verified" : L"waiting for command context");
             // Phase 2 remains read-only: use the verified Velocity base as
             // the input to existing ring/protobuf discovery. This replaces

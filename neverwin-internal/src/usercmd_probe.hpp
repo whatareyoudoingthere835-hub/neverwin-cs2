@@ -50,6 +50,7 @@ namespace usercmd_probe {
     struct RuntimeInfo {
         uintptr_t base = 0;
         int sequence = 0;
+        uintptr_t command = 0;
         bool valid = false;
     };
 
@@ -69,6 +70,13 @@ namespace usercmd_probe {
             return out;
         out.base = base;
         out.sequence = sequence;
+        // Ghidra current-build path: FUN_180B0AF10 calls FUN_180902B00
+        // immediately after reading sequence from the base at +0x5910.
+        // This is the sibling GetUserCmd(localController, sequence).
+        if (patterns.getUserCmd) {
+            using GetUserCmdFn = uintptr_t(__fastcall*)(uintptr_t, int);
+            out.command = reinterpret_cast<GetUserCmdFn>(patterns.getUserCmd)(localController, sequence);
+        }
         out.valid = true;
         return out;
     }
@@ -217,6 +225,10 @@ namespace usercmd_probe {
         }
         if (const uintptr_t found = FindBytes(client, kGetCmdBase, kGetCmdBaseMask, sizeof(kGetCmdBase)))
             out.getUserCmdBase = ResolveRelativeCall(found + 4);
+        // Current build disassembly confirms sibling at -0x90: caller passes
+        // (local controller, sequence) and receives CUserCmd in RAX.
+        if (!out.getUserCmd && out.getUserCmdBase)
+            out.getUserCmd = out.getUserCmdBase - 0x90;
         if (const uintptr_t found = FindBytes(client, kSubtickAlloc, kSubtickAllocMask, sizeof(kSubtickAlloc)))
             out.subtickMoveAlloc = ResolveRelativeCall(found + 16);
         if (const uintptr_t found = FindBytes(client, kUtlPush, kUtlPushMask, sizeof(kUtlPush)))
