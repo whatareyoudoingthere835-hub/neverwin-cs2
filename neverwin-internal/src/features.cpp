@@ -640,11 +640,25 @@ void RunFeatureLoop() {
                 const usercmd_probe::InputProbe refreshed = usercmd_probe::ProbeCSGOInput(
                     clientBase, mem::Read<float>(viewAnglesPtr), mem::Read<float>(viewAnglesPtr + 4));
                 const auto& input = refreshed.candidates[1];
-                NW_LOG(L"csgo_input runtime candidate[1]: root=0x%llX inputdelta=%.2f cmdnum=%d ring=0x%llX cmd=0x%llX cmdang=(%.2f,%.2f) cmddelta=%.2f",
+                // B50 moved in build 14176 (still zero), but the verified
+                // get_usercmd_base sequence and SDK ring pointer are both
+                // available. Test their direct combination read-only.
+                constexpr uintptr_t kCmdStride = 0x440;
+                constexpr int kCmdRingCount = 150;
+                const uintptr_t sequenceCmd = input.commandRing
+                    ? input.commandRing + static_cast<uintptr_t>(runtime.sequence % kCmdRingCount) * kCmdStride : 0;
+                const float seqPitch = mem::Read<float>(sequenceCmd + 0x18);
+                const float seqYaw = mem::Read<float>(sequenceCmd + 0x1C);
+                float seqYawDelta = std::fabs(seqYaw - mem::Read<float>(viewAnglesPtr + 4));
+                while (seqYawDelta > 360.0f) seqYawDelta -= 360.0f;
+                if (seqYawDelta > 180.0f) seqYawDelta = 360.0f - seqYawDelta;
+                const float seqDelta = std::fabs(seqPitch - mem::Read<float>(viewAnglesPtr)) + seqYawDelta;
+                NW_LOG(L"csgo_input runtime candidate[1]: root=0x%llX inputdelta=%.2f cmdnum=%d ring=0x%llX cmd=0x%llX cmdang=(%.2f,%.2f) cmddelta=%.2f | base-seq cmd=0x%llX ang=(%.2f,%.2f) delta=%.2f",
                        static_cast<unsigned long long>(input.address), input.inputAngleDelta,
                        input.commandNumber, static_cast<unsigned long long>(input.commandRing),
                        static_cast<unsigned long long>(input.currentCmd), input.commandPitch,
-                       input.commandYaw, input.commandAngleDelta);
+                       input.commandYaw, input.commandAngleDelta,
+                       static_cast<unsigned long long>(sequenceCmd), seqPitch, seqYaw, seqDelta);
             }
         }
         uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
