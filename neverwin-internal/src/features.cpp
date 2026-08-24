@@ -668,20 +668,22 @@ void RunFeatureLoop() {
                        static_cast<unsigned long long>(sequenceCmd), seqPitch, seqYaw, seqDelta);
             }
         }
-        // Hold SPACE for a few seconds after joining a match. We only inspect
-        // the validated current command and report qword fields containing
-        // IN_JUMP; no command memory is written in this probe.
+        // Differential button probe. Compare idle and physical SPACE states;
+        // +0x60/+0x68 are the strongest candidates from v49, but no memory
+        // is modified until their state transitions are confirmed.
         static DWORD lastJumpProbe = 0;
-        if (userCmdRuntimeReady && localController && (GetAsyncKeyState(VK_SPACE) & 0x8000) &&
-            nowForUserCmd - lastJumpProbe >= 1000) {
+        if (userCmdRuntimeReady && localController && nowForUserCmd - lastJumpProbe >= 750) {
             lastJumpProbe = nowForUserCmd;
             const auto runtime = usercmd_probe::InspectRuntime(localController, userCmdPatterns);
-            const auto buttons = usercmd_probe::FindDirectJumpBits(runtime.command);
-            NW_LOG(L"jump probe: cmd=0x%llX sequence=%d direct IN_JUMP fields=%d",
-                   static_cast<unsigned long long>(runtime.command), runtime.sequence, buttons.count);
-            for (int i = 0; i < buttons.count; ++i)
-                NW_LOG(L"jump probe: cmd+0x%X = 0x%llX", buttons.offsets[i],
-                       static_cast<unsigned long long>(buttons.values[i]));
+            const uint64_t buttons = mem::Read<uint64_t>(runtime.command + 0x60);
+            const uint64_t queued = mem::Read<uint64_t>(runtime.command + 0x68);
+            const uint64_t changed = mem::Read<uint64_t>(runtime.command + 0x70);
+            NW_LOG(L"jump diff: space=%d cmd=0x%llX seq=%d btn+60=0x%llX queued+68=0x%llX changed+70=0x%llX",
+                   (GetAsyncKeyState(VK_SPACE) & 0x8000) ? 1 : 0,
+                   static_cast<unsigned long long>(runtime.command), runtime.sequence,
+                   static_cast<unsigned long long>(buttons),
+                   static_cast<unsigned long long>(queued),
+                   static_cast<unsigned long long>(changed));
         }
         uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
         g_state.localPlayer.store(localPlayer);
