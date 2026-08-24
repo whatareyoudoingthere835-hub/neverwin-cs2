@@ -752,32 +752,28 @@ void RunFeatureLoop() {
         const uint8_t localTeam = ent::GetTeam(localPlayer);
         g_state.localTeam.store(localTeam);
 
-        // --- 1. Обычный auto-bhop (F4). ---
-        // Не трогаем m_fFlags: это состояние игры, а не input. Пока пользователь
-        // держит SPACE, отпускаем синтетический jump в воздухе и нажимаем его
-        // при приземлении — игра получает нормальный новый jump-press.
-        static bool jumpHeld = false;
+        // --- 1. Internal usercmd bhop (F4). ---
+        // v49 confirmed CUserCmd::buttons at +0x60: physical SPACE toggles
+        // bit IN_JUMP (0x2). While airborne we clear only that bit in the
+        // current command; on landing held physical SPACE supplies it again.
+        // No SendInput and no writes to m_fFlags.
         const bool bhopActive = g_features.bhop.load() && (GetAsyncKeyState(VK_SPACE) & 0x8000);
-        if (bhopActive) {
+        if (bhopActive && userCmdRuntimeReady && localController) {
             const bool onGround = (mem::Read<uint32_t>(localPlayer + off.m_fFlags) & 1u) != 0;
-            INPUT input{};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = VK_SPACE;
-            if (onGround && !jumpHeld) {
-                SendInput(1, &input, sizeof(input));
-                jumpHeld = true;
-            } else if (!onGround && jumpHeld) {
-                input.ki.dwFlags = KEYEVENTF_KEYUP;
-                SendInput(1, &input, sizeof(input));
-                jumpHeld = false;
+            if (!onGround) {
+                const auto runtime = usercmd_probe::InspectRuntime(localController, userCmdPatterns);
+                constexpr uint64_t kInJump = 0x2ull;
+                const uintptr_t buttonsAddress = runtime.command + 0x60;
+                const uint64_t buttons = mem::Read<uint64_t>(buttonsAddress);
+                if (runtime.command && (buttons & kInJump)) {
+                    mem::Write<uint64_t>(buttonsAddress, buttons & ~kInJump);
+                    static bool logged = false;
+                    if (!logged) {
+                        NW_LOG(L"bhop: usercmd buttons +0x60 confirmed; clearing IN_JUMP in air.");
+                        logged = true;
+                    }
+                }
             }
-        } else if (jumpHeld) {
-            INPUT input{};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wVk = VK_SPACE;
-            input.ki.dwFlags = KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(input));
-            jumpHeld = false;
         }
 
         // --- 2. Gamesense: 20% шанс дропа оружия при выстреле/перезарядке. ---
