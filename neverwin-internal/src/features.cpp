@@ -76,9 +76,15 @@ namespace {
             return;
         constexpr uint64_t kInJump = 0x2ull;
         const uintptr_t buttons = runtime.command + 0x60;
+        const uintptr_t changed = runtime.command + 0x68;
         const uint64_t value = mem::Read<uint64_t>(buttons);
-        if (value & kInJump)
+        if (value & kInJump) {
+            // CUserCmd direct input state: +0x60=value, +0x68=changed.
+            // Marking the transition makes the engine propagate the cleared
+            // bit to its protobuf command instead of restoring held SPACE.
             mem::Write<uint64_t>(buttons, value & ~kInJump);
+            mem::Write<uint64_t>(changed, mem::Read<uint64_t>(changed) | kInJump);
+        }
     }
 
     void TryHookCreateMove(uintptr_t clientBase) {
