@@ -187,6 +187,30 @@ namespace usercmd_probe {
         return out;
     }
 
+    struct ButtonProbe {
+        uintptr_t cmd = 0;
+        uint32_t offsets[19]{};
+        uint64_t values[19]{};
+        int count = 0;
+    };
+
+    // Read-only first pass: while physical SPACE is held, locate qword fields
+    // in the validated 0x98 CUserCmd that carry IN_JUMP (bit 1).
+    inline ButtonProbe FindDirectJumpBits(uintptr_t cmd) {
+        ButtonProbe out{};
+        out.cmd = cmd;
+        if (!cmd) return out;
+        for (uint32_t offset = 0; offset <= 0x90; offset += 8) {
+            const uint64_t value = mem::Read<uint64_t>(cmd + offset);
+            if ((value & 0x2ull) != 0 && out.count < 19) {
+                out.offsets[out.count] = offset;
+                out.values[out.count] = value;
+                ++out.count;
+            }
+        }
+        return out;
+    }
+
     inline Patterns Scan() {
         Patterns out{};
         const HMODULE client = GetModuleHandleW(L"client.dll");

@@ -668,6 +668,21 @@ void RunFeatureLoop() {
                        static_cast<unsigned long long>(sequenceCmd), seqPitch, seqYaw, seqDelta);
             }
         }
+        // Hold SPACE for a few seconds after joining a match. We only inspect
+        // the validated current command and report qword fields containing
+        // IN_JUMP; no command memory is written in this probe.
+        static DWORD lastJumpProbe = 0;
+        if (userCmdRuntimeReady && localController && (GetAsyncKeyState(VK_SPACE) & 0x8000) &&
+            nowForUserCmd - lastJumpProbe >= 1000) {
+            lastJumpProbe = nowForUserCmd;
+            const auto runtime = usercmd_probe::InspectRuntime(localController, userCmdPatterns);
+            const auto buttons = usercmd_probe::FindDirectJumpBits(runtime.command);
+            NW_LOG(L"jump probe: cmd=0x%llX sequence=%d direct IN_JUMP fields=%d",
+                   static_cast<unsigned long long>(runtime.command), runtime.sequence, buttons.count);
+            for (int i = 0; i < buttons.count; ++i)
+                NW_LOG(L"jump probe: cmd+0x%X = 0x%llX", buttons.offsets[i],
+                       static_cast<unsigned long long>(buttons.values[i]));
+        }
         uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
         g_state.localPlayer.store(localPlayer);
         if (!localPlayer || !entityList)
