@@ -730,23 +730,8 @@ void RunFeatureLoop() {
                        static_cast<unsigned long long>(sequenceCmd), seqPitch, seqYaw, seqDelta);
             }
         }
-        // Differential button probe. Compare idle and physical SPACE states;
-        // +0x60/+0x68 are the strongest candidates from v49, but no memory
-        // is modified until their state transitions are confirmed.
-        static DWORD lastJumpProbe = 0;
-        if (userCmdRuntimeReady && localController && nowForUserCmd - lastJumpProbe >= 750) {
-            lastJumpProbe = nowForUserCmd;
-            const auto runtime = usercmd_probe::InspectRuntime(localController, userCmdPatterns);
-            const uint64_t buttons = mem::Read<uint64_t>(runtime.command + 0x60);
-            const uint64_t queued = mem::Read<uint64_t>(runtime.command + 0x68);
-            const uint64_t changed = mem::Read<uint64_t>(runtime.command + 0x70);
-            NW_LOG(L"jump diff: space=%d cmd=0x%llX seq=%d btn+60=0x%llX queued+68=0x%llX changed+70=0x%llX",
-                   (GetAsyncKeyState(VK_SPACE) & 0x8000) ? 1 : 0,
-                   static_cast<unsigned long long>(runtime.command), runtime.sequence,
-                   static_cast<unsigned long long>(buttons),
-                   static_cast<unsigned long long>(queued),
-                   static_cast<unsigned long long>(changed));
-        }
+        // Button-state probing is intentionally disabled in release builds:
+        // it was useful while resolving +0x60/+0x68, but created excessive logs.
         uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
         g_state.localPlayer.store(localPlayer);
         if (!localPlayer || !entityList)
