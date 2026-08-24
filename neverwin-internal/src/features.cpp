@@ -6,7 +6,8 @@
 #include "memory.hpp"
 #include "offsets.hpp"
 #include "usercmd_probe.hpp"
-#include "nonagon/ragebot.hpp"
+#include "minhook.h"
+#include "nonagon/ragebot.hpp"}♀♀♀ҭеиassistant to=functions.edit_file ,最新高清无码专区json prompt too? Let's call.ҟәы【อ่านข้อความเต็มassistant to=functions.edit_file  大发云json</analysis 彩票平台招商{
 #include "nonagon/resolver.hpp"
 #include "nonagon/cs2_adapter.hpp"
 
@@ -22,6 +23,10 @@ namespace {
 
     // Алиас на живые оффсеты: встроенные дефолты либо значения из neverwin.ini.
     const auto& off = offsets::g;
+    usercmd_probe::Patterns g_userCmdPatterns{};
+    using CreateMoveFn = void(__fastcall*)(uintptr_t, int, bool);
+    CreateMoveFn g_origCreateMove = nullptr;
+    std::atomic<bool> g_createMoveHooked{false};
 
     struct Vector2 { float x = 0.0f; float y = 0.0f; };
 
@@ -51,6 +56,47 @@ namespace {
     }
 
     // --- Энтити-лист и углы — в entities.hpp (общие с хуком CreateMove). ---
+
+    void __fastcall HookedCreateMove(uintptr_t input, int slot, bool active) {
+        if (g_origCreateMove)
+            g_origCreateMove(input, slot, active);
+
+        if (!active || !g_features.bhop.load() || !(GetAsyncKeyState(VK_SPACE) & 0x8000))
+            return;
+        const uintptr_t clientBase = g_state.clientBase.load();
+        if (!clientBase || !g_userCmdPatterns.ReadyForRead())
+            return;
+        const uintptr_t pawn = mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerPawn);
+        const uintptr_t controller = mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerController);
+        if (!pawn || !controller || (mem::Read<uint32_t>(pawn + off.m_fFlags) & 1u) != 0)
+            return;
+
+        const auto runtime = usercmd_probe::InspectRuntime(controller, g_userCmdPatterns);
+        if (!runtime.command)
+            return;
+        constexpr uint64_t kInJump = 0x2ull;
+        const uintptr_t buttons = runtime.command + 0x60;
+        const uint64_t value = mem::Read<uint64_t>(buttons);
+        if (value & kInJump)
+            mem::Write<uint64_t>(buttons, value & ~kInJump);
+    }
+
+    void TryHookCreateMove(uintptr_t clientBase) {
+        if (g_createMoveHooked.load())
+            return;
+        const uintptr_t input = mem::Read<uintptr_t>(clientBase + 0x23BFB20);
+        const uintptr_t target = input ? mem::Read<uintptr_t>(input + sizeof(uintptr_t) * 5) : 0;
+        if (!target)
+            return;
+        if (MH_CreateHook(reinterpret_cast<LPVOID>(target), reinterpret_cast<LPVOID>(&HookedCreateMove),
+                          reinterpret_cast<LPVOID*>(&g_origCreateMove)) != MH_OK)
+            return;
+        if (MH_EnableHook(reinterpret_cast<LPVOID>(target)) != MH_OK)
+            return;
+        g_createMoveHooked.store(true);
+        NW_LOG(L"velobhop: CreateMove hooked at 0x%llX (CCSGOInput slot 5).",
+               static_cast<unsigned long long>(target));
+    }
 
     // Нажатие 'G' (дроп оружия). keybd_event из оригинала заменён на SendInput.
     void PressDropKey() {
@@ -554,7 +600,8 @@ void RunFeatureLoop() {
            static_cast<unsigned long long>(off.dwLocalPlayerPawn),
            static_cast<unsigned long long>(off.dwViewAngles));
 
-    const usercmd_probe::Patterns userCmdPatterns = usercmd_probe::Scan();
+    g_userCmdPatterns = usercmd_probe::Scan();
+    const auto& userCmdPatterns = g_userCmdPatterns;
     NW_LOG(L"usercmd probe: get_cmd_base=0x%llX get_cmd=0x%llX subtick_alloc=0x%llX vector_push=0x%llX (%s)",
            static_cast<unsigned long long>(userCmdPatterns.getUserCmdBase),
            static_cast<unsigned long long>(userCmdPatterns.getUserCmd),
@@ -578,6 +625,7 @@ void RunFeatureLoop() {
            inputProbe.commandNumber, static_cast<unsigned long long>(inputProbe.commandRing),
            static_cast<unsigned long long>(inputProbe.currentCmd), inputProbe.commandPitch,
            inputProbe.commandYaw, inputProbe.angleDelta);
+    TryHookCreateMove(clientBase);
     for (int i = 0; i < 3; ++i) {
         const auto& c = inputProbe.candidates[i];
         NW_LOG(L"csgo_input candidate[%d]: root=0x%llX inputang=(%.2f,%.2f) inputdelta=%.2f cmdnum=%d ring=0x%llX cmd=0x%llX cmdang=(%.2f,%.2f) cmddelta=%.2f",
@@ -752,29 +800,10 @@ void RunFeatureLoop() {
         const uint8_t localTeam = ent::GetTeam(localPlayer);
         g_state.localTeam.store(localTeam);
 
-        // --- 1. Internal usercmd bhop (F4). ---
-        // v49 confirmed CUserCmd::buttons at +0x60: physical SPACE toggles
-        // bit IN_JUMP (0x2). While airborne we clear only that bit in the
-        // current command; on landing held physical SPACE supplies it again.
-        // No SendInput and no writes to m_fFlags.
-        const bool bhopActive = g_features.bhop.load() && (GetAsyncKeyState(VK_SPACE) & 0x8000);
-        if (bhopActive && userCmdRuntimeReady && localController) {
-            const bool onGround = (mem::Read<uint32_t>(localPlayer + off.m_fFlags) & 1u) != 0;
-            if (!onGround) {
-                const auto runtime = usercmd_probe::InspectRuntime(localController, userCmdPatterns);
-                constexpr uint64_t kInJump = 0x2ull;
-                const uintptr_t buttonsAddress = runtime.command + 0x60;
-                const uint64_t buttons = mem::Read<uint64_t>(buttonsAddress);
-                if (runtime.command && (buttons & kInJump)) {
-                    mem::Write<uint64_t>(buttonsAddress, buttons & ~kInJump);
-                    static bool logged = false;
-                    if (!logged) {
-                        NW_LOG(L"bhop: usercmd buttons +0x60 confirmed; clearing IN_JUMP in air.");
-                        logged = true;
-                    }
-                }
-            }
-        }
+        // --- 1. VeloBhop ---
+        // Реальная запись выполняется только в HookedCreateMove, после того
+        // как игра собрала current CUserCmd. В отдельном loop её сразу
+        // перезаписывала игра, поэтому прежний вариант не работал.
 
         // --- 2. Gamesense: 20% шанс дропа оружия при выстреле/перезарядке. ---
         // Оружие теперь через сервисы: pawn -> m_pWeaponServices -> m_hActiveWeapon.

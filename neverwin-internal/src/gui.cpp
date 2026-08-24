@@ -282,8 +282,8 @@ namespace {
             if (ImGui::Checkbox("Nonagon Ragebot [F6]", &rage)) g_features.ragebot.store(rage);
         } else if (page == 1) {
             bool bhop = g_features.bhop.load();
-            if (ImGui::Checkbox("Auto bhop [F4]", &bhop)) g_features.bhop.store(bhop);
-            ImGui::TextDisabled("Usercmd bhop foundation is being ported.");
+                if (ImGui::Checkbox("VeloBhop [F4]", &bhop)) g_features.bhop.store(bhop);
+                ImGui::TextDisabled("Velocity CreateMove / CUserCmd path.");
         } else if (page == 2) {
             ImGui::TextColored(accent, "tg: @fkfwj");
             ImGui::TextDisabled("More features coming soon.");
