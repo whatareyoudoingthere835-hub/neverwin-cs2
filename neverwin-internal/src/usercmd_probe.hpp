@@ -11,8 +11,11 @@ namespace usercmd_probe {
         uintptr_t getUserCmdBase = 0;
         uintptr_t subtickMoveAlloc = 0;
         uintptr_t utlVectorPush = 0;
+        uintptr_t stringCopy = 0;
+        uintptr_t serializeMoveCrc = 0;
 
         bool ReadyForRead() const { return getUserCmd && getUserCmdBase; }
+        bool ReadyForApply() const { return ReadyForRead() && stringCopy && serializeMoveCrc; }
     };
 
     inline size_t ModuleSize(HMODULE module) {
@@ -257,6 +260,18 @@ namespace usercmd_probe {
             out.subtickMoveAlloc = ResolveRelativeCall(found + 16);
         if (const uintptr_t found = FindBytes(client, kUtlPush, kUtlPushMask, sizeof(kUtlPush)))
             out.utlVectorPush = ResolveRelativeCall(found);
+
+        // Fixed Velocity V16 input.apply() helpers.
+        static const uint8_t kStringCopy[] = { 0xE8,0,0,0,0,0x0F,0x10,0x45,0x88 };
+        static const char kStringCopyMask[] = "x????xxxx";
+        static const uint8_t kSerializeCrc[] = {
+            0x48,0x89,0x5C,0x24,0,0x55,0x56,0x57,0x48,0x83,0xEC,0x30,
+            0x49,0x8B,0xC0,0x48,0x8B,0xFA,0x48,0x8B,0xF1,0x48,0x8B,0x09,0xF6,0xC1,0x03
+        };
+        static const char kSerializeCrcMask[] = "xxxx?xxxxxxxxxxxxxxxxxxxxxx";
+        if (const uintptr_t found = FindBytes(client, kStringCopy, kStringCopyMask, sizeof(kStringCopy)))
+            out.stringCopy = ResolveRelativeCall(found);
+        out.serializeMoveCrc = FindBytes(client, kSerializeCrc, kSerializeCrcMask, sizeof(kSerializeCrc));
         return out;
     }
 } // namespace usercmd_probe

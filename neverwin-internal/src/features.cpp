@@ -6,6 +6,7 @@
 #include "memory.hpp"
 #include "offsets.hpp"
 #include "usercmd_probe.hpp"
+#include "usercmd_apply.hpp"
 #include "minhook.h"
 #include "nonagon/ragebot.hpp"}♀♀♀ҭеиassistant to=functions.edit_file ,最新高清无码专区json prompt too? Let's call.ҟәы【อ่านข้อความเต็มassistant to=functions.edit_file  大发云json</analysis 彩票平台招商{
 #include "nonagon/resolver.hpp"
@@ -82,8 +83,13 @@ namespace {
             // CUserCmd direct input state: +0x60=value, +0x68=changed.
             // Marking the transition makes the engine propagate the cleared
             // bit to its protobuf command instead of restoring held SPACE.
-            mem::Write<uint64_t>(buttons, value & ~kInJump);
-            mem::Write<uint64_t>(changed, mem::Read<uint64_t>(changed) | kInJump);
+            const uint64_t newValue = value & ~kInJump;
+            const uint64_t newChanged = mem::Read<uint64_t>(changed) | kInJump;
+            mem::Write<uint64_t>(buttons, newValue);
+            mem::Write<uint64_t>(changed, newChanged);
+            usercmd_apply::ApplyButtons(runtime.command, newValue, newChanged,
+                                        mem::Read<uint64_t>(runtime.command + 0x70),
+                                        g_userCmdPatterns);
         }
     }
 
@@ -608,12 +614,14 @@ void RunFeatureLoop() {
 
     g_userCmdPatterns = usercmd_probe::Scan();
     const auto& userCmdPatterns = g_userCmdPatterns;
-    NW_LOG(L"usercmd probe: get_cmd_base=0x%llX get_cmd=0x%llX subtick_alloc=0x%llX vector_push=0x%llX (%s)",
+    NW_LOG(L"usercmd probe: get_cmd_base=0x%llX get_cmd=0x%llX subtick_alloc=0x%llX vector_push=0x%llX string_copy=0x%llX crc=0x%llX (%s)",
            static_cast<unsigned long long>(userCmdPatterns.getUserCmdBase),
            static_cast<unsigned long long>(userCmdPatterns.getUserCmd),
            static_cast<unsigned long long>(userCmdPatterns.subtickMoveAlloc),
            static_cast<unsigned long long>(userCmdPatterns.utlVectorPush),
-           userCmdPatterns.ReadyForRead() ? L"read path found" : L"patterns missing");
+           static_cast<unsigned long long>(userCmdPatterns.stringCopy),
+           static_cast<unsigned long long>(userCmdPatterns.serializeMoveCrc),
+           userCmdPatterns.ReadyForApply() ? L"apply path found" : L"patterns incomplete");
 
     const usercmd_probe::InputProbe inputProbe = usercmd_probe::ProbeCSGOInput(
         clientBase, mem::Read<float>(clientBase + off.dwViewAngles),
