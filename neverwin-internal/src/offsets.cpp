@@ -54,6 +54,11 @@ namespace offsets {
         o.m_bDormant        = ReadHex(L"m_bDormant",        o.m_bDormant);
         o.m_pCameraServices = ReadHex(L"m_pCameraServices", o.m_pCameraServices);
         o.m_pWeaponServices = ReadHex(L"m_pWeaponServices", o.m_pWeaponServices);
+        o.m_pMovementServices = ReadHex(L"m_pMovementServices", o.m_pMovementServices);
+        o.m_nLastCommandNumberProcessed = ReadHex(L"m_nLastCommandNumberProcessed", o.m_nLastCommandNumberProcessed);
+        o.m_flCmdForwardMove = ReadHex(L"m_flCmdForwardMove", o.m_flCmdForwardMove);
+        o.m_flCmdLeftMove = ReadHex(L"m_flCmdLeftMove", o.m_flCmdLeftMove);
+        o.m_vecLastMovementImpulses = ReadHex(L"m_vecLastMovementImpulses", o.m_vecLastMovementImpulses);
         o.m_bWaitForNoAttack = ReadHex(L"m_bWaitForNoAttack", o.m_bWaitForNoAttack);
         o.m_bGunGameImmunity = ReadHex(L"m_bGunGameImmunity", o.m_bGunGameImmunity);
         o.m_iIDEntIndex     = ReadHex(L"m_iIDEntIndex",     o.m_iIDEntIndex);

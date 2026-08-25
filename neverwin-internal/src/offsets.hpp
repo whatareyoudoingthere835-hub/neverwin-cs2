@@ -39,6 +39,12 @@ namespace offsets {
         // --- C_BasePlayerPawn / C_CSPlayerPawnBase / C_CSPlayerPawn ---
         std::uintptr_t m_pCameraServices = 0x1240; // CPlayer_CameraServices*
         std::uintptr_t m_pWeaponServices = 0x1208; // CPlayer_WeaponServices*
+        std::uintptr_t m_pMovementServices = 0x1248; // CPlayer_MovementServices*
+        // CPlayer_MovementServices, build 14177 (CS2-OFFSETS archive).
+        std::uintptr_t m_nLastCommandNumberProcessed = 0x188;
+        std::uintptr_t m_flCmdForwardMove = 0x1A0;
+        std::uintptr_t m_flCmdLeftMove = 0x1A4;
+        std::uintptr_t m_vecLastMovementImpulses = 0x1CC;
         std::uintptr_t m_bWaitForNoAttack = 0x1C98; // запрет выстрела после смены/респавна
         std::uintptr_t m_bGunGameImmunity = 0x3268; // spawn protection
         std::uintptr_t m_iIDEntIndex       = 0x342C; // сущность под прицелом
