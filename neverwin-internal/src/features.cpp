@@ -62,7 +62,11 @@ namespace {
         if (g_origCreateMove)
             g_origCreateMove(input, slot, active);
 
-        if (!active || !g_features.bhop.load() || !(GetAsyncKeyState(VK_SPACE) & 0x8000))
+        // Velocity processes the command regardless of the callback's active
+        // flag; on this client the relevant command ticks can arrive with it
+        // false, so do not gate Bhop on that argument.
+        (void)active;
+        if (!g_features.bhop.load() || !(GetAsyncKeyState(VK_SPACE) & 0x8000))
             return;
         const uintptr_t clientBase = g_state.clientBase.load();
         if (!clientBase || !g_userCmdPatterns.ReadyForRead())
