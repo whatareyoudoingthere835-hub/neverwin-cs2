@@ -89,7 +89,8 @@ namespace offsets {
         // listEntry = entityList + 0x10 + 8 * (index >> 9)
         // element   = listEntry  + 0x78 * (index & 0x1FF)
         std::uintptr_t listEntryOffset = 0x10;
-        std::uintptr_t entryStride     = 0x78;
+        // Build 14177: confirmed by the supplied CHEAT source CGameEntitySystem.
+        std::uintptr_t entryStride     = 0x70;
     };
 
     // Живые значения: встроенные по умолчанию, либо из neverwin.ini.
