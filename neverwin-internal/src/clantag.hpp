@@ -1,5 +1,6 @@
 #pragma once
 #include "pch.h"
+#include "log.hpp"
 
 // Lightweight name animator adapted from Quint's engine-command approach.
 // It uses only public CreateInterface entry points and restores the captured
@@ -60,11 +61,18 @@ namespace clantag {
             if (!enabled) { Reset(); return; }
             if (!m_captured) {
                 const char* name = detail::FindNameCvar();
-                if (!name || !*name) return;
+                if (!name || !*name) {
+                    LogOnce(1, L"clantag: cvar 'name' not found; waiting for VEngineCvar007.");
+                    return;
+                }
                 m_baseName = StripTag(name);
                 m_captured = !m_baseName.empty();
-                if (!m_captured) return;
+                if (!m_captured) {
+                    LogOnce(2, L"clantag: base nickname is empty.");
+                    return;
+                }
                 m_lastTick = GetTickCount();
+                LogOnce(3, L"clantag: captured base nickname '%S'.", m_baseName.c_str());
             }
 
             const DWORD now = GetTickCount();
@@ -106,13 +114,28 @@ namespace clantag {
             const std::string tag(kTag, m_index);
             const std::string display = tag.empty() ? m_baseName : tag + " " + m_baseName;
             if (display == m_lastApplied) return;
-            if (detail::Execute("setinfo name \"" + display + "\"")) m_lastApplied = display;
+            if (detail::Execute("setinfo name \"" + display + "\"")) {
+                m_lastApplied = display;
+                LogOnce(4, L"clantag: engine command path is active.");
+            } else {
+                LogOnce(5, L"clantag: Source2EngineToClient001 / ExecuteClientCmd unavailable.");
+            }
+        }
+        void LogOnce(int code, const wchar_t* fmt, ...) {
+            if (m_lastStatus == code) return;
+            m_lastStatus = code;
+            wchar_t text[256]{};
+            va_list args; va_start(args, fmt);
+            _vsnwprintf(text, 255, fmt, args);
+            va_end(args);
+            NW_LOG(L"%s", text);
         }
 
         std::string m_baseName, m_lastApplied;
         DWORD m_lastTick = 0;
         size_t m_index = 0;
         bool m_captured = false, m_growing = true, m_full = false;
+        int m_lastStatus = 0;
     };
 
     inline Animator g_animator;
