@@ -114,10 +114,10 @@ namespace usercmd_probe {
         bool valid = false;
     };
 
-    inline InputProbe ProbeCSGOInput(uintptr_t clientBase, float livePitch, float liveYaw) {
+    inline InputProbe ProbeCSGOInput(uintptr_t clientBase, uintptr_t inputOffset, float livePitch, float liveYaw) {
         InputProbe out{};
-        // dwCSGOInput from the supplied 20 Aug 2026 dump. Read-only only.
-        out.input = mem::Read<uintptr_t>(clientBase + 0x23BFB20);
+        // dwCSGOInput from the currently loaded dumper offsets. Read-only only.
+        out.input = mem::Read<uintptr_t>(clientBase + inputOffset);
         // This object is not a conventional vtable object on the current
         // client. Ghidra shows direct calls through [CCSGOInput + 0x8], so
         // record the first object slots themselves (no second dereference).
@@ -130,7 +130,7 @@ namespace usercmd_probe {
 
         // cs2-sdk header has build 14175. Compare all plausible object roots
         // read-only against live view angles before trusting its B50/B58 fields.
-        const uintptr_t directGlobal = clientBase + 0x23BFB20;
+        const uintptr_t directGlobal = clientBase + inputOffset;
         const uintptr_t legacyStatic = clientBase + 0x23B95F0;
         const uintptr_t roots[] = { out.input, directGlobal, legacyStatic };
         auto angleDelta = [&](float pitch, float yaw) {

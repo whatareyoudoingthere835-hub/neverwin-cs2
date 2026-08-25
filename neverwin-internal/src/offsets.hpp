@@ -15,10 +15,11 @@ namespace offsets {
 
     struct Offsets {
         // --- client.dll ---
-        std::uintptr_t dwEntityList      = 0x2555050; // CGameEntitySystem::m_list
-        std::uintptr_t dwLocalPlayerPawn = 0x23AA118;
-        std::uintptr_t dwViewAngles      = 0x23C01A8;
-        std::uintptr_t dwLocalPlayerController = 0x2384DB0; // контроллер (цепочка user cmd, raimv2)
+        std::uintptr_t dwEntityList      = 0x2572230; // build 14177
+        std::uintptr_t dwLocalPlayerPawn = 0x23C7268;
+        std::uintptr_t dwViewAngles      = 0x23DD308;
+        std::uintptr_t dwLocalPlayerController = 0x23A1F30;
+        std::uintptr_t dwCSGOInput       = 0x23DCC80;
         // CGameEntitySystem::m_hHighestEntityIndex. Нужен только запасному
         // scanner-у F1, когда controller->m_hPlayerPawn временно не резолвится.
         std::uintptr_t highestEntityIndexOffset = 0x2090;
@@ -49,7 +50,7 @@ namespace offsets {
         // поэтому оно дополняется базовым CBasePlayerController::m_hPawn ниже.
         std::uintptr_t m_hPlayerPawn      = 0x914;
         std::uintptr_t m_bPawnIsAlive     = 0x91C;
-        std::uintptr_t m_hPawn            = 0x6BC;  // CBasePlayerController
+        std::uintptr_t m_hPawn            = 0x600;  // CBasePlayerController, build 14177
         // Обратная связь pawn -> controller; используется для верифицированного
         // fallback-скана reverse aim.
         std::uintptr_t m_hController      = 0x13D0;

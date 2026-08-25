@@ -42,6 +42,7 @@ namespace offsets {
         o.dwLocalPlayerPawn = ReadHex(L"dwLocalPlayerPawn", o.dwLocalPlayerPawn);
         o.dwViewAngles      = ReadHex(L"dwViewAngles",      o.dwViewAngles);
         o.dwLocalPlayerController = ReadHex(L"dwLocalPlayerController", o.dwLocalPlayerController);
+        o.dwCSGOInput       = ReadHex(L"dwCSGOInput",       o.dwCSGOInput);
         o.highestEntityIndexOffset = ReadHex(L"highestEntityIndexOffset", o.highestEntityIndexOffset);
         o.m_iHealth         = ReadHex(L"m_iHealth",         o.m_iHealth);
         o.m_lifeState       = ReadHex(L"m_lifeState",       o.m_lifeState);

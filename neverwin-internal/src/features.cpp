@@ -624,7 +624,7 @@ void RunFeatureLoop() {
            userCmdPatterns.ReadyForApply() ? L"apply path found" : L"patterns incomplete");
 
     const usercmd_probe::InputProbe inputProbe = usercmd_probe::ProbeCSGOInput(
-        clientBase, mem::Read<float>(clientBase + off.dwViewAngles),
+        clientBase, off.dwCSGOInput, mem::Read<float>(clientBase + off.dwViewAngles),
         mem::Read<float>(clientBase + off.dwViewAngles + 4));
     NW_LOG(L"csgo_input probe: ptr=0x%llX slot0=0x%llX valid=%s slots[0..7]=%llX %llX %llX %llX %llX %llX %llX %llX patterns input=0x%llX related_call=0x%llX create_move_raw=0x%llX cmdnum=%d ring=0x%llX cmd=0x%llX cmdang=(%.2f,%.2f) delta=%.2f",
            static_cast<unsigned long long>(inputProbe.input),
@@ -707,7 +707,7 @@ void RunFeatureLoop() {
                 // Re-read it after a command context exists; at DLL startup
                 // its command number is legitimately still zero.
                 const usercmd_probe::InputProbe refreshed = usercmd_probe::ProbeCSGOInput(
-                    clientBase, mem::Read<float>(viewAnglesPtr), mem::Read<float>(viewAnglesPtr + 4));
+                    clientBase, off.dwCSGOInput, mem::Read<float>(viewAnglesPtr), mem::Read<float>(viewAnglesPtr + 4));
                 const auto& input = refreshed.candidates[1];
                 // B50 moved in build 14176 (still zero), but the verified
                 // get_usercmd_base sequence and SDK ring pointer are both
