@@ -23,6 +23,13 @@ namespace nonagon_cs2 {
         }
 
         Vec3 GetHitboxPos(HitboxID h) const override {
+            // Head uses live skeleton bone 7 so crouching/animation does not
+            // aim above the player. Other fallback hitboxes retain offsets.
+            if (h == HITBOX_HEAD) {
+                ent::Vector3 head{};
+                if (ent::GetBonePosition(pawn, 7, head))
+                    return ToNonagonVec(head);
+            }
             const auto& off = offsets::g;
             uintptr_t node = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
             if (!node) return Vec3{};

@@ -388,9 +388,14 @@ namespace {
                 continue;
             }
 
-            const float dx = player.origin.x - eye.x;
-            const float dy = player.origin.y - eye.y;
-            const float dz = player.origin.z - eye.z;
+            // Prefer real skeleton head bone (7); fixed origin + 64 misses
+            // crouching/animation poses. Fall back only if bone cache is absent.
+            ent::Vector3 aimPosition{};
+            if (!ent::GetBonePosition(player.pawn, 7, aimPosition))
+                aimPosition = { player.origin.x, player.origin.y, player.origin.z + 64.0f };
+            const float dx = aimPosition.x - eye.x;
+            const float dy = aimPosition.y - eye.y;
+            const float dz = aimPosition.z - eye.z;
             const float d2 = dx * dx + dy * dy + dz * dz;
             if (d2 < 64.0f * 64.0f)
                 ++stats.tooClose;
@@ -400,7 +405,7 @@ namespace {
             ++aliveCount;
             if (d2 < bestDist2) {
                 bestDist2 = d2;
-                bestOrigin = player.origin;
+                bestOrigin = aimPosition;
                 bestVelocity = player.velocity;
                 bestHealth = player.health;
                 found = true;
@@ -882,11 +887,12 @@ void RunFeatureLoop() {
                                    aliveCount, totalCount, stats)) {
                 const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
                 if (eye.x != 0.0f || eye.y != 0.0f || eye.z != 0.0f) {
-                    // +64 юнита вверх от origin — корпус/голова.
+                    // targetOrigin is the real skeleton head bone when cache
+                    // is available; prediction is applied to that position.
                     const float prediction = g_features.reverseAimPrediction.load();
                     const ent::Vector3 target{ targetOrigin.x + targetVelocity.x * prediction,
                                                targetOrigin.y + targetVelocity.y * prediction,
-                                               targetOrigin.z + targetVelocity.z * prediction + 64.0f };
+                                               targetOrigin.z + targetVelocity.z * prediction };
                     ent::Vector2 targetAngles = ent::CalcAngles(eye, target);
                     ent::NormalizeAngles(targetAngles.x, targetAngles.y);
                     const ent::Vector2 currentAngles = mem::Read<ent::Vector2>(viewAnglesPtr);

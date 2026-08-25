@@ -310,6 +310,24 @@ namespace ent {
         }
     }
 
+    // Bone cache layout from the supplied CHEAT source. CBoneData is 0x20:
+    // Vector3 Location, float Scale, quaternion Rotation. Bone 7 is head.
+    inline bool GetBonePosition(uintptr_t pawn, int bone, Vector3& out) {
+        if (!pawn || bone < 0 || bone > 255)
+            return false;
+        const uintptr_t node = mem::Read<uintptr_t>(pawn + offsets::g.m_pGameSceneNode);
+        if (!node)
+            return false;
+        const uintptr_t bones = mem::Read<uintptr_t>(node + 0x150 + 0x80);
+        if (!bones)
+            return false;
+        const Vector3 position = mem::Read<Vector3>(bones + static_cast<uintptr_t>(bone) * 0x20);
+        if (!IsUsablePlayerOrigin(position))
+            return false;
+        out = position;
+        return true;
+    }
+
     // Глаза павна: abs origin из сцена-ноды + view offset.
     // m_vecViewOffset (C_BaseModelEntity, 0xE78) — тип CNetworkViewOffsetVector,
     // сетевой: при несовпадении билда/оффсета отдаёт не Vector, а мусор.
