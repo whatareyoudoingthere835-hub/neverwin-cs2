@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "features.hpp"
+#include "clantag.hpp"
 #include "entities.hpp"
 #include "gui.hpp"
 #include "log.hpp"
@@ -667,6 +668,7 @@ void RunFeatureLoop() {
     for (;;) {
         Sleep(1);
         HandleHotkeys();
+        clantag::g_animator.Update(g_features.clanTag.load());
         const bool autoFireEnabled = g_features.ragebot.load() &&
                                      g_features.rageAutoFire.load() &&
                                      !gui::g_menuOpen.load();

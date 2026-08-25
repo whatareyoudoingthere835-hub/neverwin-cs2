@@ -304,7 +304,10 @@ namespace {
                 ImGui::TextDisabled("Velocity CreateMove / CUserCmd path.");
         } else if (page == 2) {
             ImGui::TextColored(accent, "tg: @fkfwj");
-            ImGui::TextDisabled("More features coming soon.");
+            ImGui::Separator();
+            bool clanTag = g_features.clanTag.load();
+            if (ImGui::Checkbox("ClanTag [NeverWin]", &clanTag)) g_features.clanTag.store(clanTag);
+            ImGui::TextDisabled("Animated tag + your captured normal nickname.");
         } else {
             bool recoil = g_features.visualRecoil.load();
             if (ImGui::Checkbox("Visual recoil x4 [F3]", &recoil)) g_features.visualRecoil.store(recoil);
