@@ -268,7 +268,7 @@ namespace {
             const char* modes[] = { "raimv1", "raimv2", "test" };
             if (ImGui::Combo("Reverse aim mode", &mode, modes, 3)) g_features.reverseAimMode.store(mode + 1);
             float speed = g_features.reverseAimSpeed.load();
-            if (ImGui::SliderFloat("Aim speed (deg/s)", &speed, 30.f, 2160.f, "%.0f")) g_features.reverseAimSpeed.store(speed);
+            if (ImGui::SliderFloat("Aim speed (deg/s)", &speed, 30.f, 8000.f, "%.0f")) g_features.reverseAimSpeed.store(speed);
             float smooth = g_features.reverseAimSmooth.load();
             if (ImGui::SliderFloat("Aim smooth (ms)", &smooth, 0.f, 500.f, "%.0f")) g_features.reverseAimSmooth.store(smooth);
             float pred = g_features.reverseAimPrediction.load();
@@ -278,8 +278,26 @@ namespace {
             if (ImGui::Checkbox("Antiaimless [F2]", &aa)) g_features.antiAimless.store(aa);
             float spin = g_features.spinSpeed.load();
             if (ImGui::SliderFloat("Spin speed", &spin, 0.f, 10.f, "x%.0f")) g_features.spinSpeed.store(spin);
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::TextColored(accent, "Ragebot");
             bool rage = g_features.ragebot.load();
             if (ImGui::Checkbox("Nonagon Ragebot [F6]", &rage)) g_features.ragebot.store(rage);
+            if (rage) {
+                bool trigger = g_features.rageAutoFire.load();
+                if (ImGui::Checkbox("Triggerbot / auto fire", &trigger)) g_features.rageAutoFire.store(trigger);
+                bool resolver = g_features.resolver.load();
+                if (ImGui::Checkbox("Resolver", &resolver)) g_features.resolver.store(resolver);
+                bool backtrack = g_features.backtrack.load();
+                if (ImGui::Checkbox("Backtrack", &backtrack)) g_features.backtrack.store(backtrack);
+                int fov = g_features.rageFov.load();
+                if (ImGui::SliderInt("Rage FOV", &fov, 1, 180)) g_features.rageFov.store(fov);
+                int hitchance = g_features.rageHitchance.load();
+                if (ImGui::SliderInt("Hitchance", &hitchance, 0, 100)) g_features.rageHitchance.store(hitchance);
+                int damage = g_features.rageMinDamage.load();
+                if (ImGui::SliderInt("Minimum damage", &damage, 1, 100)) g_features.rageMinDamage.store(damage);
+                ImGui::TextDisabled("Auto fire requires engine crosshair confirmation.");
+            }
         } else if (page == 1) {
             bool bhop = g_features.bhop.load();
                 if (ImGui::Checkbox("VeloBhop [F4]", &bhop)) g_features.bhop.store(bhop);
