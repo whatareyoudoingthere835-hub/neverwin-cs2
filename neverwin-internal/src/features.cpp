@@ -170,7 +170,9 @@ namespace {
                 logged = true;
                 NW_LOG(L"velobhop apply: %s (stage %d)",
                        stage == usercmd_apply::kStageOk ? L"protobuf buttons applied"
-                                                        : L"protobuf path unavailable",
+                                                        : (stage == usercmd_apply::kStageOkNoCrc
+                                                               ? L"buttons applied, crc skipped"
+                                                               : L"protobuf path unavailable"),
                        static_cast<int>(stage));
             }
         }
@@ -876,15 +878,21 @@ void RunFeatureLoop() {
         if (!localPlayer || !entityList)
             continue;
 
-        // Проверяем layout entity system на local pawn ровно один раз для
-        // каждого нового указателя системы. Это лечит невалидный +0x10 layout,
-        // при котором slots 1..64 возвращали мусор вместо controller.
+        // Проверяем layout entity system. Retry: на 14177 первая попытка может
+        // попасть на момент, когда controller ещё нулевой (загрузка раунда) —
+        // тогда пробуем снова каждые 5 секунд, а не сдаёмся навсегда.
         static uintptr_t checkedEntitySystem = 0;
         static uintptr_t resolvedEntitySystem = 0;
         static bool entityLayoutLogged = false;
-        if (entityList != checkedEntitySystem) {
+        static DWORD lastLayoutRetry = 0;
+        const bool layoutNeedsRetry =
+            entityList != checkedEntitySystem ||
+            (!g_state.entityLayoutVerified.load() && localController && localPlayer &&
+             nowForUserCmd - lastLayoutRetry >= 5000);
+        if (layoutNeedsRetry) {
             checkedEntitySystem = entityList;
             resolvedEntitySystem = entityList;
+            lastLayoutRetry = nowForUserCmd;
             uintptr_t discoveredSystem = 0, discoveredListOffset = 0, discoveredStride = 0;
             // Двойная верификация: local controller в слотах 1..64 И его handle
             // к local pawn. Одиночная проверка на 14177 ловила ложный

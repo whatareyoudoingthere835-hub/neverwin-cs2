@@ -15,7 +15,8 @@ namespace usercmd_apply {
         kStageBaseInvalid = 4,
         kStageNoButtons = 5,
         kStageButtonsInvalid = 6,
-        kStageNoArena = 7
+        kStageNoArena = 7,
+        kStageOkNoCrc = 8 // кнопки применены, CRC пропущен (нет arena)
     };
 
     inline ApplyStage ApplyButtons(uintptr_t cmd, uint64_t state1, uint64_t state2,
@@ -83,12 +84,19 @@ namespace usercmd_apply {
         }
 
         *reinterpret_cast<uint32_t*>(base) |= 0x1u;
+        // Arena: сначала заголовок protobuf-сообщения (V16), затем
+        // usercmd::proto_arena (cmd+0x18) — на 14177 заголовок оказался пуст.
+        uintptr_t arena = 0;
         const uintptr_t arenaBits = *reinterpret_cast<const uintptr_t*>(baseRaw + 0x8);
-        uintptr_t arena = arenaBits & ~uintptr_t(0x3);
-        if (arenaBits & 1u)
-            arena = *reinterpret_cast<const uintptr_t*>(arena);
+        if (arenaBits) {
+            arena = arenaBits & ~uintptr_t(0x3);
+            if (arenaBits & 1u)
+                arena = *reinterpret_cast<const uintptr_t*>(arena);
+        }
         if (!arena)
-            return kStageNoArena;
+            arena = *reinterpret_cast<const uintptr_t*>(cmd + 0x18);
+        if (!arena)
+            return kStageOkNoCrc; // кнопки записаны; CRC без arena пропускаем
         uint8_t message[0x18]{};
         using StringCopyFn = void(__fastcall*)(uintptr_t, uintptr_t, int);
         using SerializeFn = void(__fastcall*)(void*, uintptr_t, uintptr_t);
@@ -116,7 +124,8 @@ namespace usercmd_apply {
     // (V16 acquire_subtick_step), иначе alloc через игровой allocator.
     // Поле (impl base+0x08): arena +0x00, current_size +0x08, total +0x0C,
     // rep +0x10; rep: allocated(int) + elements[] c +0x08.
-    inline uintptr_t AcquireSubtickStep(uintptr_t field, const usercmd_probe::Patterns& p) {
+    inline uintptr_t AcquireSubtickStep(uintptr_t field, uintptr_t arenaFallback,
+                                        const usercmd_probe::Patterns& p) {
         if (!field || !mem::IsValidPtr(reinterpret_cast<const void*>(field), 0x18))
             return 0;
         const uintptr_t rep = *reinterpret_cast<const uintptr_t*>(field + 0x10);
@@ -138,7 +147,9 @@ namespace usercmd_apply {
         }
         if (!p.subtickMoveAlloc || !p.utlVectorPush)
             return 0;
-        const uintptr_t arena = *reinterpret_cast<const uintptr_t*>(field);
+        uintptr_t arena = *reinterpret_cast<const uintptr_t*>(field);
+        if (!arena)
+            arena = arenaFallback;
         if (!arena)
             return 0;
         using AllocFn = void*(__fastcall*)(uintptr_t);
@@ -165,10 +176,14 @@ namespace usercmd_apply {
         if (!base)
             return false;
         const uintptr_t field = base + 0x08; // repeated subtick_move_step
+        // Arena для выделения шагов: локальная у поля, затем usercmd::proto_arena.
+        uintptr_t arena = *reinterpret_cast<const uintptr_t*>(field);
+        if (!arena)
+            arena = *reinterpret_cast<const uintptr_t*>(cmd + 0x18);
         constexpr uint64_t kInJump = 0x2ull;
         constexpr uint32_t kStepBits = 0x1Fu; // button|pressed|when|analog*2
 
-        const uintptr_t up = AcquireSubtickStep(field, p);
+        const uintptr_t up = AcquireSubtickStep(field, arena, p);
         if (!up)
             return false;
         *reinterpret_cast<uint32_t*>(up) = kStepBits;
@@ -176,7 +191,7 @@ namespace usercmd_apply {
         *reinterpret_cast<uint8_t*>(up + 0x10) = 0; // released
         *reinterpret_cast<float*>(up + 0x14) = releaseWhen;
 
-        const uintptr_t down = AcquireSubtickStep(field, p);
+        const uintptr_t down = AcquireSubtickStep(field, arena, p);
         if (!down)
             return false;
         *reinterpret_cast<uint32_t*>(down) = kStepBits;
