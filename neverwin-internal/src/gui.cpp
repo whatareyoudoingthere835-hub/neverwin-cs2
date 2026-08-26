@@ -234,6 +234,32 @@ namespace {
                  uint8_t localTeam) {
         if (!g_features.espEnabled.load())
             return;
+
+        // Скан игроков дорогой (64 слота с безопасными чтениями) — делаем его
+        // максимум 10 раз в секунду и кешируем мировые координаты. Раньше он
+        // шёл каждый кадр в Present и ронял FPS. Если entity layout не
+        // подтверждён рантаймом, скан не запускается вовсе.
+        struct EspTarget {
+            ent::Vector3 head, feet;
+            int health;
+        };
+        static std::vector<EspTarget> cache;
+        static DWORD lastScan = 0;
+        const DWORD now = GetTickCount();
+        if (now - lastScan >= 100) {
+            lastScan = now;
+            cache.clear();
+            if (g_state.entityLayoutVerified.load() && entityList) {
+                ent::ForEachPlayer(entityList, [&](const ent::PlayerSnapshot& player) {
+                    if (player.pawn == localPlayer || player.team == localTeam || !player.IsAlive())
+                        return;
+                    cache.push_back({ { player.origin.x, player.origin.y, player.origin.z + 72.0f },
+                                      player.origin,
+                                      player.health });
+                });
+            }
+        }
+
         float matrix[16];
         if (!mem::ReadArray<float>(clientBase + offsets::g.dwViewMatrix, matrix, 16))
             return;
@@ -241,16 +267,12 @@ namespace {
         const float height = ImGui::GetIO().DisplaySize.y;
         ImDrawList* draw = ImGui::GetBackgroundDrawList();
 
-        ent::ForEachPlayer(entityList, [&](const ent::PlayerSnapshot& player) {
-            if (player.pawn == localPlayer || player.team == localTeam || !player.IsAlive())
-                return;
-            const ent::Vector3 headTop{ player.origin.x, player.origin.y, player.origin.z + 72.0f };
-            const ent::Vector3 feet{ player.origin.x, player.origin.y, player.origin.z };
+        for (const EspTarget& target : cache) {
             ImVec2 top, bottom;
-            if (!WorldToScreen(headTop, top, matrix, width, height)) return;
-            if (!WorldToScreen(feet, bottom, matrix, width, height)) return;
+            if (!WorldToScreen(target.head, top, matrix, width, height)) continue;
+            if (!WorldToScreen(target.feet, bottom, matrix, width, height)) continue;
             const float boxHeight = bottom.y - top.y;
-            if (boxHeight < 6.0f) return;
+            if (boxHeight < 6.0f) continue;
             const float boxWidth = boxHeight * 0.45f;
             const float left = top.x - boxWidth * 0.5f;
             const float right = top.x + boxWidth * 0.5f;
@@ -259,13 +281,13 @@ namespace {
             draw->AddRect({left + 1, top.y + 1}, {right + 1, bottom.y + 1}, shadow, 0.f, 0, 2.0f);
             draw->AddRect({left, top.y}, {right, bottom.y}, accent, 0.f, 0, 1.5f);
             if (g_features.espHealth.load()) {
-                const float fraction = std::clamp(player.health, 0, 100) / 100.0f;
+                const float fraction = std::clamp(target.health, 0, 100) / 100.0f;
                 const ImU32 health = IM_COL32((int)(255 * (1.f - fraction)),
                                               (int)(210 * fraction), 50, 255);
                 draw->AddRectFilled({left - 5.0f, bottom.y},
                                     {left - 2.0f, bottom.y - boxHeight * fraction}, health);
             }
-        });
+        }
     }
 
     // --- меню: Neverwin в visual style MemeSense (sidebar + page cards). ---

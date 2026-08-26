@@ -805,21 +805,33 @@ void RunFeatureLoop() {
             checkedEntitySystem = entityList;
             resolvedEntitySystem = entityList;
             uintptr_t discoveredSystem = 0, discoveredListOffset = 0, discoveredStride = 0;
-            const uint32_t localPawnHandle = localController
-                ? mem::Read<uint32_t>(localController + off.m_hPawn) : 0;
-            if (ent::DiscoverEntityListLayout(entityList, localPlayer, localPawnHandle,
-                                              discoveredSystem, discoveredListOffset,
-                                              discoveredStride)) {
+            // На 14177 offset handle-поля контроллера мог сместиться:
+            // пробуем и m_hPawn (0x600), и m_hPlayerPawn (0x914).
+            const uint32_t handleCandidates[2] = {
+                localController ? mem::Read<uint32_t>(localController + off.m_hPawn) : 0u,
+                localController ? mem::Read<uint32_t>(localController + off.m_hPlayerPawn) : 0u,
+            };
+            bool discovered = false;
+            for (uint32_t handleCandidate : handleCandidates) {
+                if (discovered)
+                    break;
+                discovered = ent::DiscoverEntityListLayout(entityList, entityListPtr, localPlayer,
+                                                           handleCandidate, discoveredSystem,
+                                                           discoveredListOffset, discoveredStride);
+            }
+            if (discovered) {
                 resolvedEntitySystem = discoveredSystem;
                 entityList = discoveredSystem;
                 offsets::g.listEntryOffset = discoveredListOffset;
                 offsets::g.entryStride = discoveredStride;
+                g_state.entityLayoutVerified.store(true);
                 NW_LOG(L"entity-list: layout найден по local pawn: system=0x%llX listOffset=0x%llX stride=0x%llX",
                        static_cast<unsigned long long>(entityList),
                        static_cast<unsigned long long>(discoveredListOffset),
                        static_cast<unsigned long long>(discoveredStride));
             } else if (!entityLayoutLogged) {
                 entityLayoutLogged = true;
+                g_state.entityLayoutVerified.store(false);
                 NW_LOG(L"WARNING: entity-list: layout local pawn не найден; использую fallback +0x%llX/0x%llX.",
                        static_cast<unsigned long long>(offsets::g.listEntryOffset),
                        static_cast<unsigned long long>(offsets::g.entryStride));

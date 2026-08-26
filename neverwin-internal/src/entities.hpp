@@ -55,17 +55,21 @@ namespace ent {
     // совершенно чужие адреса. Ищем layout по единственному надёжно известному
     // объекту — local pawn, полученному через dwLocalPlayerPawn. Совпадение
     // именно указателя pawn исключает угадывание по health/team.
-    inline bool DiscoverEntityListLayout(uintptr_t entitySystem, uintptr_t knownPawn,
+    inline bool DiscoverEntityListLayout(uintptr_t entitySystem, uintptr_t rawGlobalAddress,
+                                         uintptr_t knownPawn,
                                          uint32_t knownHandle, uintptr_t& outSystem,
                                          uintptr_t& outListOffset, uintptr_t& outStride) {
-        if (!entitySystem || !knownPawn)
+        if ((!entitySystem && !rawGlobalAddress) || !knownPawn)
             return false;
 
+        // 14177 может отдавать систему либо по указателю из dwEntityList,
+        // либо напрямую по самому адресу глобала — проверяем оба корня.
         const uintptr_t roots[] = {
             entitySystem,
-            mem::Read<uintptr_t>(entitySystem),
-            mem::Read<uintptr_t>(entitySystem + 8),
-            mem::Read<uintptr_t>(entitySystem + 0x10),
+            rawGlobalAddress,
+            entitySystem ? mem::Read<uintptr_t>(entitySystem) : 0,
+            entitySystem ? mem::Read<uintptr_t>(entitySystem + 8) : 0,
+            entitySystem ? mem::Read<uintptr_t>(entitySystem + 0x10) : 0,
         };
         constexpr uintptr_t strides[] = { 0x78, 0x80, 0x70 };
         constexpr int kChunkCount = 64;
@@ -94,14 +98,13 @@ namespace ent {
                     }
                 }
             }
-            // Handle был валидным, но ячейка с known pawn не найдена. Полный
-            // перебор здесь не даст более надёжного результата и слишком
-            // дорог для игрового потока.
-            return false;
+            // Быстрый путь не сошёлся (например, offset handle-поля сместился
+            // в новом билде) — падаем в ограниченный полный поиск ниже, а не
+            // сдаёмся сразу.
         }
 
-        // Если handle недоступен, ограниченный полный поиск остаётся только
-        // запасным путём. Его границы намеренно малы, чтобы не подвесить игру.
+        // Полный поиск: chunk валидируется один раз, дальше сырые чтения —
+        // это дешёво даже для 512*3 ячеек на chunk.
         for (uintptr_t root : roots) {
             if (!root || !mem::IsValidPtr(reinterpret_cast<const void*>(root), 0x20))
                 continue;
@@ -111,20 +114,19 @@ namespace ent {
                         root + listOffset + 8ull * static_cast<uintptr_t>(chunkIndex));
                     if (!chunk)
                         continue;
+                    constexpr size_t kChunkBytes = kEntriesPerChunk * 0x80;
+                    if (!mem::IsValidPtr(reinterpret_cast<const void*>(chunk), kChunkBytes))
+                        continue;
                     for (uintptr_t stride : strides) {
-                        // До полного обхода исключаем адреса, которые не могут
-                        // вместить даже одну identity-запись.
-                        if (!mem::IsValidPtr(reinterpret_cast<const void*>(chunk), sizeof(uintptr_t)))
-                            continue;
+                        const uintptr_t* cells = reinterpret_cast<const uintptr_t*>(chunk);
                         for (int entry = 0; entry < kEntriesPerChunk; ++entry) {
-                            const uintptr_t candidate = mem::Read<uintptr_t>(
-                                chunk + stride * static_cast<uintptr_t>(entry));
-                            if (candidate != knownPawn)
-                                continue;
-                            outSystem = root;
-                            outListOffset = listOffset;
-                            outStride = stride;
-                            return true;
+                            const uintptr_t candidate = cells[entry * (stride / sizeof(uintptr_t))];
+                            if (candidate == knownPawn) {
+                                outSystem = root;
+                                outListOffset = listOffset;
+                                outStride = stride;
+                                return true;
+                            }
                         }
                     }
                 }

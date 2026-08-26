@@ -42,6 +42,7 @@ struct DebugState {
     std::atomic<int>       localTeam{0};
     std::atomic<bool>      viewAnglesWritable{false};
     std::atomic<bool>      offsetsFromIni{false}; // true = оффсеты из neverwin.ini
+    std::atomic<bool>      entityLayoutVerified{false}; // runtime entity layout подтверждён
 };
 
 extern Features   g_features;
