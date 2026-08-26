@@ -232,7 +232,7 @@ namespace {
 
         g_lastProbeScore = best.score;
 
-        if (best.score <= 25.0f) {
+        if (best.score <= 3.0f) {
             g_cmdLayout = best.l;
             NW_LOG(L"raimv2: раскладка user cmd ring=0x%X seq=0x%X pb=0x%X base=0x%X msg=0x%X ang=0x%X (%s стиль, отклонение %.1f°)",
                    best.l.ringBase, best.l.seqOff, best.l.pbOff, best.l.baseOff,
@@ -759,35 +759,40 @@ void RunFeatureLoop() {
         // it was useful while resolving +0x60/+0x68, but created excessive logs.
 
         // Silent-aim foundation: locate viewangles inside the 0x98 command by
-        // matching live dwViewAngles against command floats. Six samples are
-        // enough; move the mouse normally while they run. Read-only.
+        // matching live dwViewAngles against command floats. Samples with
+        // near-zero live angles (spectate/round transitions) are skipped
+        // without consuming the sample budget. Read-only.
         static int viewProbeSamples = 0;
+        static int viewProbeAttempts = 0;
         static DWORD lastViewProbe = 0;
-        if (userCmdRuntimeReady && localController && viewProbeSamples < 6 &&
-            nowForUserCmd - lastViewProbe >= 800) {
+        if (userCmdRuntimeReady && localController && viewProbeSamples < 12 &&
+            viewProbeAttempts < 40 && nowForUserCmd - lastViewProbe >= 800) {
             lastViewProbe = nowForUserCmd;
             const auto runtime = usercmd_probe::InspectRuntime(localController, userCmdPatterns);
             if (runtime.command &&
                 mem::IsValidPtr(reinterpret_cast<const void*>(runtime.command), 0x98)) {
-                ++viewProbeSamples;
                 const float livePitch = mem::ReadFast<float>(viewAnglesPtr);
                 const float liveYaw = mem::ReadFast<float>(viewAnglesPtr + 4);
-                wchar_t hits[128]{};
-                int written = 0;
-                for (uint32_t offset = 0; offset <= 0x94 && written < 24; offset += 4) {
-                    const float v = mem::ReadFast<float>(runtime.command + offset);
-                    if (!std::isfinite(v) || std::fabs(v) < 0.01f)
-                        continue;
-                    const bool pitchHit = std::fabs(v - livePitch) < 0.02f && std::fabs(livePitch) > 0.01f;
-                    const bool yawHit = std::fabs(v - liveYaw) < 0.02f && std::fabs(liveYaw) > 0.01f;
-                    if (!pitchHit && !yawHit)
-                        continue;
-                    written += _snwprintf(hits + written, 24, L"%s0x%X", written ? L" " : L"", offset);
+                if (std::fabs(livePitch) + std::fabs(liveYaw) > 0.5f) {
+                    ++viewProbeSamples;
+                    wchar_t hits[128]{};
+                    int written = 0;
+                    for (uint32_t offset = 0; offset <= 0x94 && written < 24; offset += 4) {
+                        const float v = mem::ReadFast<float>(runtime.command + offset);
+                        if (!std::isfinite(v) || std::fabs(v) < 0.01f)
+                            continue;
+                        const bool pitchHit = std::fabs(v - livePitch) < 0.02f;
+                        const bool yawHit = std::fabs(v - liveYaw) < 0.02f;
+                        if (!pitchHit && !yawHit)
+                            continue;
+                        written += _snwprintf(hits + written, 24, L"%s0x%X", written ? L" " : L"", offset);
+                    }
+                    NW_LOG(L"viewangles probe [%d/12]: cmd=0x%llX ang=(%.2f,%.2f) matches: %s",
+                           viewProbeSamples, static_cast<unsigned long long>(runtime.command),
+                           livePitch, liveYaw, written ? hits : L"(none this sample)");
                 }
-                NW_LOG(L"viewangles probe [%d/6]: cmd=0x%llX ang=(%.2f,%.2f) matches: %s",
-                       viewProbeSamples, static_cast<unsigned long long>(runtime.command),
-                       livePitch, liveYaw, written ? hits : L"(none this sample)");
             }
+            ++viewProbeAttempts;
         }
 
         uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
@@ -805,27 +810,21 @@ void RunFeatureLoop() {
             checkedEntitySystem = entityList;
             resolvedEntitySystem = entityList;
             uintptr_t discoveredSystem = 0, discoveredListOffset = 0, discoveredStride = 0;
-            // На 14177 offset handle-поля контроллера мог сместиться:
-            // пробуем и m_hPawn (0x600), и m_hPlayerPawn (0x914).
-            const uint32_t handleCandidates[2] = {
-                localController ? mem::Read<uint32_t>(localController + off.m_hPawn) : 0u,
-                localController ? mem::Read<uint32_t>(localController + off.m_hPlayerPawn) : 0u,
-            };
-            bool discovered = false;
-            for (uint32_t handleCandidate : handleCandidates) {
-                if (discovered)
-                    break;
-                discovered = ent::DiscoverEntityListLayout(entityList, entityListPtr, localPlayer,
-                                                           handleCandidate, discoveredSystem,
-                                                           discoveredListOffset, discoveredStride);
-            }
+            // Двойная верификация: local controller в слотах 1..64 И его handle
+            // к local pawn. Одиночная проверка на 14177 ловила ложный
+            // listOffset=0x0, при котором слоты читали мусор.
+            int controllerSlot = 0;
+            const bool discovered = ent::DiscoverEntityListLayoutVerified(
+                entityList, entityListPtr, localPlayer, localController,
+                discoveredSystem, discoveredListOffset, discoveredStride, controllerSlot);
             if (discovered) {
                 resolvedEntitySystem = discoveredSystem;
                 entityList = discoveredSystem;
                 offsets::g.listEntryOffset = discoveredListOffset;
                 offsets::g.entryStride = discoveredStride;
                 g_state.entityLayoutVerified.store(true);
-                NW_LOG(L"entity-list: layout найден по local pawn: system=0x%llX listOffset=0x%llX stride=0x%llX",
+                NW_LOG(L"entity-list: layout подтверждён (controller slot %d): system=0x%llX listOffset=0x%llX stride=0x%llX",
+                       controllerSlot,
                        static_cast<unsigned long long>(entityList),
                        static_cast<unsigned long long>(discoveredListOffset),
                        static_cast<unsigned long long>(discoveredStride));

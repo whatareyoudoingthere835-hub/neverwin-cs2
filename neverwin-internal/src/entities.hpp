@@ -135,6 +135,69 @@ namespace ent {
         return false;
     }
 
+    // Верификация layout по ДВУМ известным объектам: local controller обязан
+    // лежать в низких слотах chunk[0], а local pawn — резолвиться из handle,
+    // прочитанного уже с подтверждённого контроллера. Это отсекает ложные
+    // совпадения (например listOffset=0x0, при котором слоты 1..64 читают
+    // мусор из первого поля системы, как это было на 14177).
+    inline bool DiscoverEntityListLayoutVerified(uintptr_t entitySystem, uintptr_t rawGlobalAddress,
+                                                 uintptr_t localPawn, uintptr_t localController,
+                                                 uintptr_t& outSystem, uintptr_t& outListOffset,
+                                                 uintptr_t& outStride, int& outControllerSlot) {
+        if ((!entitySystem && !rawGlobalAddress) || !localPawn || !localController)
+            return false;
+
+        const uintptr_t roots[] = {
+            entitySystem,
+            rawGlobalAddress,
+            entitySystem ? mem::Read<uintptr_t>(entitySystem) : 0,
+            entitySystem ? mem::Read<uintptr_t>(entitySystem + 8) : 0,
+            entitySystem ? mem::Read<uintptr_t>(entitySystem + 0x10) : 0,
+        };
+        constexpr uintptr_t strides[] = { 0x70, 0x78, 0x80 };
+        constexpr size_t kChunkBytes = 512 * 0x80;
+
+        for (uintptr_t root : roots) {
+            if (!root || !mem::IsValidPtr(reinterpret_cast<const void*>(root), 0x20))
+                continue;
+            for (uintptr_t listOffset = 0; listOffset <= 0x40; listOffset += 8) {
+                const uintptr_t chunk0 = mem::Read<uintptr_t>(root + listOffset);
+                if (!chunk0 || !mem::IsValidPtr(reinterpret_cast<const void*>(chunk0), kChunkBytes))
+                    continue;
+                for (uintptr_t stride : strides) {
+                    const uintptr_t* cells = reinterpret_cast<const uintptr_t*>(chunk0);
+                    for (int slot = kFirstPlayerSlot; slot <= kMaxPlayerSlots; ++slot) {
+                        if (cells[slot * (stride / sizeof(uintptr_t))] != localController)
+                            continue;
+                        // Контроллер подтверждён в этом слоте. Теперь проверяем
+                        // цепочку controller -> handle -> pawn этим же layout-ом.
+                        const uint32_t handles[2] = {
+                            mem::Read<uint32_t>(localController + offsets::g.m_hPawn),
+                            mem::Read<uint32_t>(localController + offsets::g.m_hPlayerPawn),
+                        };
+                        for (uint32_t handle : handles) {
+                            const uint32_t index = handle & kHandleIndexMask;
+                            if (index == 0 || index == kInvalidHandleIndex)
+                                continue;
+                            const uintptr_t chunk = mem::Read<uintptr_t>(
+                                root + listOffset + 8ull * static_cast<uintptr_t>(index >> 9));
+                            if (!chunk)
+                                continue;
+                            if (mem::Read<uintptr_t>(chunk + stride * static_cast<uintptr_t>(index & 0x1FF)) == localPawn) {
+                                outSystem = root;
+                                outListOffset = listOffset;
+                                outStride = stride;
+                                outControllerSlot = slot;
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     inline bool IsValidPlayerHandle(uint32_t handle) {
         const uint32_t index = handle & kHandleIndexMask;
         return handle != 0 && index != 0 && index != kInvalidHandleIndex;
