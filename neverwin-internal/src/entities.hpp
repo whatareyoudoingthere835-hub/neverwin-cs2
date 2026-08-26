@@ -155,16 +155,20 @@ namespace ent {
             entitySystem ? mem::Read<uintptr_t>(entitySystem + 0x10) : 0,
         };
         constexpr uintptr_t strides[] = { 0x70, 0x78, 0x80 };
-        constexpr size_t kChunkBytes = 512 * 0x80;
 
         for (uintptr_t root : roots) {
             if (!root || !mem::IsValidPtr(reinterpret_cast<const void*>(root), 0x20))
                 continue;
             for (uintptr_t listOffset = 0; listOffset <= 0x40; listOffset += 8) {
                 const uintptr_t chunk0 = mem::Read<uintptr_t>(root + listOffset);
-                if (!chunk0 || !mem::IsValidPtr(reinterpret_cast<const void*>(chunk0), kChunkBytes))
+                if (!chunk0)
                     continue;
                 for (uintptr_t stride : strides) {
+                    // Валидируем chunk ровно под этот stride: требовать 64KB
+                    // (512*0x80) для stride 0x70 было слишком строго — реальный
+                    // chunk может быть 0xE000, и dual-verify отбрасывал его.
+                    if (!mem::IsValidPtr(reinterpret_cast<const void*>(chunk0), stride * 512))
+                        continue;
                     const uintptr_t* cells = reinterpret_cast<const uintptr_t*>(chunk0);
                     for (int slot = kFirstPlayerSlot; slot <= kMaxPlayerSlots; ++slot) {
                         if (cells[slot * (stride / sizeof(uintptr_t))] != localController)

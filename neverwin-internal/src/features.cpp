@@ -179,15 +179,27 @@ namespace {
     void TryHookCreateMove(uintptr_t clientBase) {
         if (g_createMoveHooked.load())
             return;
-        const uintptr_t input = mem::Read<uintptr_t>(clientBase + 0x23BFB20);
+        // dwCSGOInput берём из живых оффсетов: зашитый 0x23BFB20 (14176)
+        // после обновления до 14177 молча ломал установку хука.
+        const uintptr_t input = mem::Read<uintptr_t>(clientBase + off.dwCSGOInput);
         const uintptr_t target = input ? mem::Read<uintptr_t>(input + sizeof(uintptr_t) * 5) : 0;
-        if (!target)
+        if (!target) {
+            NW_LOG(L"velobhop: CreateMove target не найден (dwCSGOInput=0x%llX ptr=0x%llX).",
+                   static_cast<unsigned long long>(off.dwCSGOInput),
+                   static_cast<unsigned long long>(input));
             return;
+        }
         if (MH_CreateHook(reinterpret_cast<LPVOID>(target), reinterpret_cast<LPVOID>(&HookedCreateMove),
-                          reinterpret_cast<LPVOID*>(&g_origCreateMove)) != MH_OK)
+                          reinterpret_cast<LPVOID*>(&g_origCreateMove)) != MH_OK) {
+            NW_LOG(L"velobhop: MH_CreateHook не удался (target 0x%llX).",
+                   static_cast<unsigned long long>(target));
             return;
-        if (MH_EnableHook(reinterpret_cast<LPVOID>(target)) != MH_OK)
+        }
+        if (MH_EnableHook(reinterpret_cast<LPVOID>(target)) != MH_OK) {
+            NW_LOG(L"velobhop: MH_EnableHook не удался (target 0x%llX).",
+                   static_cast<unsigned long long>(target));
             return;
+        }
         g_createMoveHooked.store(true);
         NW_LOG(L"velobhop: CreateMove hooked at 0x%llX (CCSGOInput slot 5).",
                static_cast<unsigned long long>(target));
