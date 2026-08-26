@@ -86,7 +86,33 @@ namespace {
             !mem::IsValidPtr(reinterpret_cast<const void*>(pawn + off.m_fFlags), sizeof(uint32_t)))
             return;
         static bool wasInAir = false;
-        if ((mem::ReadFast<uint32_t>(pawn + off.m_fFlags) & 1u) != 0) {
+        const bool onGroundNow = (mem::ReadFast<uint32_t>(pawn + off.m_fFlags) & 1u) != 0;
+
+        // Диагностика: подтверждаем, что callback реально вызывается, и
+        // снимаем образцы состояния команды (+0x58..+0x78) при SPACE on/off —
+        // offsets кнопок подтверждались на 14176, на 14177 их надо перепроверить.
+        static bool loggedAlive = false;
+        if (!loggedAlive) {
+            loggedAlive = true;
+            NW_LOG(L"velobhop diag: CreateMove callback alive (slot %d).", slot);
+        }
+        static DWORD lastDiag = 0;
+        static int diagSamples = 0;
+        const DWORD nowDiag = GetTickCount();
+        if (diagSamples < 10 && nowDiag - lastDiag >= 1000) {
+            lastDiag = nowDiag;
+            ++diagSamples;
+            NW_LOG(L"velobhop diag [%d/10]: seq=%d cmd=0x%llX ground=%d space=%d q58=%016llX q60=%016llX q68=%016llX q70=%016llX",
+                   diagSamples, runtime.sequence,
+                   static_cast<unsigned long long>(runtime.command), onGroundNow ? 1 : 0,
+                   (GetAsyncKeyState(VK_SPACE) & 0x8000) ? 1 : 0,
+                   static_cast<unsigned long long>(mem::ReadFast<uint64_t>(runtime.command + 0x58)),
+                   static_cast<unsigned long long>(mem::ReadFast<uint64_t>(runtime.command + 0x60)),
+                   static_cast<unsigned long long>(mem::ReadFast<uint64_t>(runtime.command + 0x68)),
+                   static_cast<unsigned long long>(mem::ReadFast<uint64_t>(runtime.command + 0x70)));
+        }
+
+        if (onGroundNow) {
             // Тик приземления: даём движку точный timestamp нажатия через
             // пару subtick-шагов release(curtime-frametime)/press(curtime),
             // как это делает сам CCSPlayerModernJump::BunnyHope. Это
