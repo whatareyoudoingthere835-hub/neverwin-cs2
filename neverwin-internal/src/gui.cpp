@@ -3,6 +3,8 @@
 #include "features.hpp"
 #include "log.hpp"
 #include "memory.hpp"
+#include "entities.hpp"
+#include "offsets.hpp"
 #include "assets/gui_icons.hpp"
 #include "assets/esp_icons.hpp"
 
@@ -213,6 +215,59 @@ namespace {
         g_imguiReady = false;
     }
 
+    // --- ESP: corner-box players через view matrix (adapted from CHEAT src). ---
+    bool WorldToScreen(const ent::Vector3& world, ImVec2& out,
+                       const float matrix[16], float width, float height) {
+        const float w = matrix[3] * world.x + matrix[7] * world.y +
+                        matrix[11] * world.z + matrix[15];
+        if (w < 0.65f) return false;
+        const float x = matrix[0] * world.x + matrix[4] * world.y +
+                        matrix[8] * world.z + matrix[12];
+        const float y = matrix[1] * world.x + matrix[5] * world.y +
+                        matrix[9] * world.z + matrix[13];
+        out.x = (width * 0.5f) + (width * 0.5f) * x / w;
+        out.y = (height * 0.5f) - (height * 0.5f) * y / w;
+        return true;
+    }
+
+    void DrawEsp(uintptr_t clientBase, uintptr_t entityList, uintptr_t localPlayer,
+                 uint8_t localTeam) {
+        if (!g_features.espEnabled.load())
+            return;
+        float matrix[16];
+        if (!mem::ReadArray<float>(clientBase + offsets::g.dwViewMatrix, matrix, 16))
+            return;
+        const float width = ImGui::GetIO().DisplaySize.x;
+        const float height = ImGui::GetIO().DisplaySize.y;
+        ImDrawList* draw = ImGui::GetBackgroundDrawList();
+
+        ent::ForEachPlayer(entityList, [&](const ent::PlayerSnapshot& player) {
+            if (player.pawn == localPlayer || player.team == localTeam || !player.IsAlive())
+                return;
+            const ent::Vector3 headTop{ player.origin.x, player.origin.y, player.origin.z + 72.0f };
+            const ent::Vector3 feet{ player.origin.x, player.origin.y, player.origin.z };
+            ImVec2 top, bottom;
+            if (!WorldToScreen(headTop, top, matrix, width, height)) return;
+            if (!WorldToScreen(feet, bottom, matrix, width, height)) return;
+            const float boxHeight = bottom.y - top.y;
+            if (boxHeight < 6.0f) return;
+            const float boxWidth = boxHeight * 0.45f;
+            const float left = top.x - boxWidth * 0.5f;
+            const float right = top.x + boxWidth * 0.5f;
+            const ImU32 accent = IM_COL32(235, 60, 70, 230);
+            const ImU32 shadow = IM_COL32(0, 0, 0, 200);
+            draw->AddRect({left + 1, top.y + 1}, {right + 1, bottom.y + 1}, shadow, 0.f, 0, 2.0f);
+            draw->AddRect({left, top.y}, {right, bottom.y}, accent, 0.f, 0, 1.5f);
+            if (g_features.espHealth.load()) {
+                const float fraction = std::clamp(player.health, 0, 100) / 100.0f;
+                const ImU32 health = IM_COL32((int)(255 * (1.f - fraction)),
+                                              (int)(210 * fraction), 50, 255);
+                draw->AddRectFilled({left - 5.0f, bottom.y},
+                                    {left - 2.0f, bottom.y - boxHeight * fraction}, health);
+            }
+        });
+    }
+
     // --- меню: Neverwin в visual style MemeSense (sidebar + page cards). ---
     void RenderMenu() {
         if (!gui::g_menuOpen.load())
@@ -308,6 +363,13 @@ namespace {
             bool clanTag = g_features.clanTag.load();
             if (ImGui::Checkbox("ClanTag [NeverWin]", &clanTag)) g_features.clanTag.store(clanTag);
             ImGui::TextDisabled("Animated tag + your captured normal nickname.");
+            ImGui::Separator();
+            bool esp = g_features.espEnabled.load();
+            if (ImGui::Checkbox("ESP box", &esp)) g_features.espEnabled.store(esp);
+            if (esp) {
+                bool health = g_features.espHealth.load();
+                if (ImGui::Checkbox("ESP health bar", &health)) g_features.espHealth.store(health);
+            }
         } else {
             bool recoil = g_features.visualRecoil.load();
             if (ImGui::Checkbox("Visual recoil x4 [F3]", &recoil)) g_features.visualRecoil.store(recoil);
@@ -365,6 +427,8 @@ namespace {
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
             RenderMenu();
+            DrawEsp(g_state.clientBase.load(), g_state.entityList.load(),
+                    g_state.localPlayer.load(), static_cast<uint8_t>(g_state.localTeam.load()));
             ImGui::EndFrame();
             ImGui::Render();
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());

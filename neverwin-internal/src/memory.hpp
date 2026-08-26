@@ -68,6 +68,26 @@ namespace mem {
 #endif
     }
 
+    // Безопасное чтение массива POD-элементов одним блоком.
+    template <typename T>
+    inline bool ReadArray(uintptr_t addr, T* out, size_t count) {
+        if (addr == 0 || !out || count == 0)
+            return false;
+        if (!IsValidPtr(reinterpret_cast<const void*>(addr), sizeof(T) * count))
+            return false;
+#ifdef _MSC_VER
+        __try {
+            memcpy(out, reinterpret_cast<const void*>(addr), sizeof(T) * count);
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+#else
+        memcpy(out, reinterpret_cast<const void*>(addr), sizeof(T) * count);
+        return true;
+#endif
+    }
+
     // Безопасная запись. Если регион read-only (например, секция с viewAngles) —
     // делает его writable. Повторный VirtualProtect для того же адреса
     // не выполняется (кэш последнего региона). Кэш thread_local: теперь

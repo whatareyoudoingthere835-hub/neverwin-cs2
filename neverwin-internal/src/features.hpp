@@ -21,6 +21,8 @@ struct Features {
     std::atomic<bool> bhop{false};         // F4 — обычный auto-bhop при удержании SPACE
     std::atomic<bool> gamesense{true};     // F5 — рандомный дроп оружия (20%)
     std::atomic<bool> clanTag{false};      // animated [NeverWin] + base name
+    std::atomic<bool> espEnabled{false};   // box ESP через view matrix
+    std::atomic<bool> espHealth{true};     // полоска HP рядом с боксом
     // Nonagon ragebot (F6)
     std::atomic<bool> ragebot{false};      // F6 — рейджбот с резолвером из nonagon
     std::atomic<bool> rageAutoFire{true};  // автоогонь/триггер после подтверждения живой цели
