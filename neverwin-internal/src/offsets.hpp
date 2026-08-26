@@ -19,6 +19,7 @@ namespace offsets {
         std::uintptr_t dwLocalPlayerPawn = 0x23C7268;
         std::uintptr_t dwViewAngles      = 0x23DD308;
         std::uintptr_t dwViewMatrix      = 0x23CC830; // build 14177
+        std::uintptr_t dwGlobalVars      = 0x20B05F0; // build 14177; curtime +0x30, frametime +0x08
         std::uintptr_t dwLocalPlayerController = 0x23A1F30;
         std::uintptr_t dwCSGOInput       = 0x23DCC80;
         // CGameEntitySystem::m_hHighestEntityIndex. Нужен только запасному

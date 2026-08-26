@@ -23,7 +23,7 @@ import sys
 
 # Сетевая часть: модуль client.dll
 NET_KEYS = ("dwEntityList", "dwLocalPlayerPawn", "dwViewAngles",
-            "dwLocalPlayerController", "dwCSGOInput")
+            "dwLocalPlayerController", "dwCSGOInput", "dwViewMatrix", "dwGlobalVars")
 
 # Схема: класс -> ключи. Поиск СТРОГО внутри класса — многие имена полей
 # (m_fFlags, m_iHealth, ...) встречаются в разных классах с разными оффсетами,

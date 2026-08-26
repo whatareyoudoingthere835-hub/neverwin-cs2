@@ -85,8 +85,46 @@ namespace {
             !mem::IsValidPtr(reinterpret_cast<const void*>(runtime.command), 0x98) ||
             !mem::IsValidPtr(reinterpret_cast<const void*>(pawn + off.m_fFlags), sizeof(uint32_t)))
             return;
-        if ((mem::ReadFast<uint32_t>(pawn + off.m_fFlags) & 1u) != 0)
-            return; // on ground: held SPACE supplies the jump press itself
+        static bool wasInAir = false;
+        if ((mem::ReadFast<uint32_t>(pawn + off.m_fFlags) & 1u) != 0) {
+            // Тик приземления: даём движку точный timestamp нажатия через
+            // пару subtick-шагов release(curtime-frametime)/press(curtime),
+            // как это делает сам CCSPlayerModernJump::BunnyHope. Это
+            // обходит sv_jump_spam_penalty_time — источник нестабильного bhop.
+            if (wasInAir) {
+                wasInAir = false;
+                const uintptr_t globalVars = mem::Read<uintptr_t>(clientBase + off.dwGlobalVars);
+                if (globalVars) {
+                    const float curtime = mem::ReadFast<float>(globalVars + 0x30);
+                    const float frametime = mem::ReadFast<float>(globalVars + 0x08);
+                    if (curtime > 0.0f && frametime > 0.0f) {
+                        const bool pair = usercmd_apply::AddJumpSubtickPair(
+                            runtime.command, curtime - frametime, curtime, g_userCmdPatterns);
+                        static bool loggedPair = false;
+                        if (!loggedPair) {
+                            loggedPair = true;
+                            NW_LOG(L"velobhop: landing subtick pair %s (curtime %.3f).",
+                                   pair ? L"added" : L"unavailable", curtime);
+                        }
+                        if (pair) {
+                            // Пресс должен быть виден и в прямом состоянии кнопок.
+                            mem::WriteFast<uint64_t>(runtime.command + 0x60,
+                                mem::ReadFast<uint64_t>(runtime.command + 0x60) | 0x2ull);
+                            mem::WriteFast<uint64_t>(runtime.command + 0x68,
+                                mem::ReadFast<uint64_t>(runtime.command + 0x68) | 0x2ull);
+                            usercmd_apply::ApplyButtons(
+                                runtime.command,
+                                mem::ReadFast<uint64_t>(runtime.command + 0x60),
+                                mem::ReadFast<uint64_t>(runtime.command + 0x68),
+                                mem::ReadFast<uint64_t>(runtime.command + 0x70),
+                                g_userCmdPatterns);
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        wasInAir = true;
 
         constexpr uint64_t kInJump = 0x2ull;
         const uintptr_t buttons = runtime.command + 0x60;
