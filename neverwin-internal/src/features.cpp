@@ -74,27 +74,41 @@ namespace {
             return;
         const uintptr_t pawn = mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerPawn);
         const uintptr_t controller = mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerController);
-        if (!pawn || !controller || (mem::Read<uint32_t>(pawn + off.m_fFlags) & 1u) != 0)
+        if (!pawn || !controller)
             return;
 
+        // Hot path: validate the pawn and command ranges once, then touch
+        // memory directly. The old safe reads/writes did a VirtualProtect per
+        // field and dropped the game to ~5 FPS while airborne.
         const auto runtime = usercmd_probe::InspectRuntime(controller, g_userCmdPatterns);
-        if (!runtime.command)
+        if (!runtime.command ||
+            !mem::IsValidPtr(reinterpret_cast<const void*>(runtime.command), 0x98) ||
+            !mem::IsValidPtr(reinterpret_cast<const void*>(pawn + off.m_fFlags), sizeof(uint32_t)))
             return;
+        if ((mem::ReadFast<uint32_t>(pawn + off.m_fFlags) & 1u) != 0)
+            return; // on ground: held SPACE supplies the jump press itself
+
         constexpr uint64_t kInJump = 0x2ull;
         const uintptr_t buttons = runtime.command + 0x60;
         const uintptr_t changed = runtime.command + 0x68;
-        const uint64_t value = mem::Read<uint64_t>(buttons);
+        const uint64_t value = mem::ReadFast<uint64_t>(buttons);
         if (value & kInJump) {
             // CUserCmd direct input state: +0x60=value, +0x68=changed.
-            // Marking the transition makes the engine propagate the cleared
-            // bit to its protobuf command instead of restoring held SPACE.
             const uint64_t newValue = value & ~kInJump;
-            const uint64_t newChanged = mem::Read<uint64_t>(changed) | kInJump;
-            mem::Write<uint64_t>(buttons, newValue);
-            mem::Write<uint64_t>(changed, newChanged);
-            usercmd_apply::ApplyButtons(runtime.command, newValue, newChanged,
-                                        mem::Read<uint64_t>(runtime.command + 0x70),
-                                        g_userCmdPatterns);
+            const uint64_t newChanged = mem::ReadFast<uint64_t>(changed) | kInJump;
+            mem::WriteFast<uint64_t>(buttons, newValue);
+            mem::WriteFast<uint64_t>(changed, newChanged);
+            const auto stage = usercmd_apply::ApplyButtons(
+                runtime.command, newValue, newChanged,
+                mem::ReadFast<uint64_t>(runtime.command + 0x70), g_userCmdPatterns);
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                NW_LOG(L"velobhop apply: %s (stage %d)",
+                       stage == usercmd_apply::kStageOk ? L"protobuf buttons applied"
+                                                        : L"protobuf path unavailable",
+                       static_cast<int>(stage));
+            }
         }
     }
 
@@ -743,6 +757,39 @@ void RunFeatureLoop() {
         }
         // Button-state probing is intentionally disabled in release builds:
         // it was useful while resolving +0x60/+0x68, but created excessive logs.
+
+        // Silent-aim foundation: locate viewangles inside the 0x98 command by
+        // matching live dwViewAngles against command floats. Six samples are
+        // enough; move the mouse normally while they run. Read-only.
+        static int viewProbeSamples = 0;
+        static DWORD lastViewProbe = 0;
+        if (userCmdRuntimeReady && localController && viewProbeSamples < 6 &&
+            nowForUserCmd - lastViewProbe >= 800) {
+            lastViewProbe = nowForUserCmd;
+            const auto runtime = usercmd_probe::InspectRuntime(localController, userCmdPatterns);
+            if (runtime.command &&
+                mem::IsValidPtr(reinterpret_cast<const void*>(runtime.command), 0x98)) {
+                ++viewProbeSamples;
+                const float livePitch = mem::ReadFast<float>(viewAnglesPtr);
+                const float liveYaw = mem::ReadFast<float>(viewAnglesPtr + 4);
+                wchar_t hits[128]{};
+                int written = 0;
+                for (uint32_t offset = 0; offset <= 0x94 && written < 24; offset += 4) {
+                    const float v = mem::ReadFast<float>(runtime.command + offset);
+                    if (!std::isfinite(v) || std::fabs(v) < 0.01f)
+                        continue;
+                    const bool pitchHit = std::fabs(v - livePitch) < 0.02f && std::fabs(livePitch) > 0.01f;
+                    const bool yawHit = std::fabs(v - liveYaw) < 0.02f && std::fabs(liveYaw) > 0.01f;
+                    if (!pitchHit && !yawHit)
+                        continue;
+                    written += _snwprintf(hits + written, 24, L"%s0x%X", written ? L" " : L"", offset);
+                }
+                NW_LOG(L"viewangles probe [%d/6]: cmd=0x%llX ang=(%.2f,%.2f) matches: %s",
+                       viewProbeSamples, static_cast<unsigned long long>(runtime.command),
+                       livePitch, liveYaw, written ? hits : L"(none this sample)");
+            }
+        }
+
         uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
         g_state.localPlayer.store(localPlayer);
         if (!localPlayer || !entityList)

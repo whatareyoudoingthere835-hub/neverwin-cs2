@@ -68,6 +68,18 @@ namespace mem {
 #endif
     }
 
+    // Быстрые варианты для hot-path (CreateMove): вызывать только после
+    // успешного IsValidPtr на весь диапазон. Никаких VirtualQuery/VirtualProtect.
+    template <typename T>
+    inline T ReadFast(uintptr_t addr) {
+        return *reinterpret_cast<const T*>(addr);
+    }
+
+    template <typename T>
+    inline void WriteFast(uintptr_t addr, const T& value) {
+        *reinterpret_cast<T*>(addr) = value;
+    }
+
     // Безопасное чтение массива POD-элементов одним блоком.
     template <typename T>
     inline bool ReadArray(uintptr_t addr, T* out, size_t count) {

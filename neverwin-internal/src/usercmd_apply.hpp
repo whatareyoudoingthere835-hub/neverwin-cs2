@@ -2,37 +2,52 @@
 #include "usercmd_probe.hpp"
 
 // Minimal port of Velocity V16 systems::input::apply() for button state only.
-// Layout is validated by our CUserCmd +0x60/+0x68 probes before use.
+// Hot path: every access is a raw dereference after validating each pointer
+// exactly once. Previous version did VirtualProtect on every field write,
+// which froze the game in air (~5 FPS).
 namespace usercmd_apply {
-    inline bool ApplyButtons(uintptr_t cmd, uint64_t state1, uint64_t state2,
-                             uint64_t state3, const usercmd_probe::Patterns& p) {
-        if (!cmd || !p.ReadyForApply())
-            return false;
+    // Stage codes reported through the log for a one-time verification.
+    enum ApplyStage {
+        kStageOk = 0,
+        kStageNoCmd = 1,
+        kStageNoPatterns = 2,
+        kStageNoBase = 3,
+        kStageBaseInvalid = 4,
+        kStageNoButtons = 5,
+        kStageButtonsInvalid = 6,
+        kStageNoArena = 7
+    };
+
+    inline ApplyStage ApplyButtons(uintptr_t cmd, uint64_t state1, uint64_t state2,
+                                   uint64_t state3, const usercmd_probe::Patterns& p) {
+        if (!cmd)
+            return kStageNoCmd;
+        if (!p.ReadyForApply())
+            return kStageNoPatterns;
 
         // systems::input::usercmd: CSGOUserCmdPB begins at +0x20; its m_base
         // raw protobuf pointer is +0x20 in that structure => cmd +0x40.
-        const uintptr_t baseRaw = mem::Read<uintptr_t>(cmd + 0x40);
+        const uintptr_t baseRaw = *reinterpret_cast<const uintptr_t*>(cmd + 0x40);
         if (!baseRaw)
-            return false;
+            return kStageNoBase;
         const uintptr_t base = baseRaw + 0x10; // protobuf implementation
         if (!mem::IsValidPtr(reinterpret_cast<const void*>(base), 0x40))
-            return false;
+            return kStageBaseInvalid;
 
         // CBaseUserCmdPB: m_buttons_pb at implementation +0x28.
-        const uintptr_t buttonsRaw = mem::Read<uintptr_t>(base + 0x28);
+        const uintptr_t buttonsRaw = *reinterpret_cast<const uintptr_t*>(base + 0x28);
         if (!buttonsRaw)
-            return false; // allocator path intentionally waits for a later port
+            return kStageNoButtons; // allocator path intentionally waits for a later port
         const uintptr_t buttons = buttonsRaw + 0x10;
         if (!mem::IsValidPtr(reinterpret_cast<const void*>(buttons), 0x20))
-            return false;
+            return kStageButtonsInvalid;
 
         // protobuf has_bits: base field #3 = bit 0x2; button states 1..3.
-        mem::Write<uint32_t>(base, mem::Read<uint32_t>(base) | 0x2u);
-        mem::Write<uint32_t>(buttons, mem::Read<uint32_t>(buttons) | 0x7u);
-        if (!mem::Write<uint64_t>(buttons + 0x8, state1) ||
-            !mem::Write<uint64_t>(buttons + 0x10, state2) ||
-            !mem::Write<uint64_t>(buttons + 0x18, state3))
-            return false;
+        *reinterpret_cast<uint32_t*>(base) |= 0x2u;
+        *reinterpret_cast<uint32_t*>(buttons) |= 0x7u;
+        *reinterpret_cast<uint64_t*>(buttons + 0x8) = state1;
+        *reinterpret_cast<uint64_t*>(buttons + 0x10) = state2;
+        *reinterpret_cast<uint64_t*>(buttons + 0x18) = state3;
 
         // V16 CRC serialization, limited to buttons and existing viewangles.
         uint8_t buf[64]{};
@@ -48,11 +63,14 @@ namespace usercmd_apply {
             if (state3) { *out++ = 0x19; std::memcpy(out, &state3, 8); out += 8; }
         }
 
-        const uintptr_t viewRaw = mem::Read<uintptr_t>(base + 0x30);
+        const uintptr_t viewRaw = *reinterpret_cast<const uintptr_t*>(base + 0x30);
         const uintptr_t view = viewRaw ? viewRaw + 0x10 : 0;
-        const float pitch = mem::Read<float>(view + 0x8);
-        const float yaw = mem::Read<float>(view + 0xC);
-        const float roll = mem::Read<float>(view + 0x10);
+        float pitch = 0.0f, yaw = 0.0f, roll = 0.0f;
+        if (view && mem::IsValidPtr(reinterpret_cast<const void*>(view), 0x14)) {
+            pitch = *reinterpret_cast<const float*>(view + 0x8);
+            yaw = *reinterpret_cast<const float*>(view + 0xC);
+            roll = *reinterpret_cast<const float*>(view + 0x10);
+        }
         uint8_t angleSize = 0;
         if (pitch != 0.0f) angleSize += 5;
         if (yaw != 0.0f) angleSize += 5;
@@ -64,11 +82,13 @@ namespace usercmd_apply {
             if (roll != 0.0f) { *out++ = 0x1D; std::memcpy(out, &roll, 4); out += 4; }
         }
 
-        mem::Write<uint32_t>(base, mem::Read<uint32_t>(base) | 0x1u);
-        const uintptr_t arenaBits = mem::Read<uintptr_t>(baseRaw + 0x8);
+        *reinterpret_cast<uint32_t*>(base) |= 0x1u;
+        const uintptr_t arenaBits = *reinterpret_cast<const uintptr_t*>(baseRaw + 0x8);
         uintptr_t arena = arenaBits & ~uintptr_t(0x3);
         if (arenaBits & 1u)
-            arena = mem::Read<uintptr_t>(arena);
+            arena = *reinterpret_cast<const uintptr_t*>(arena);
+        if (!arena)
+            return kStageNoArena;
         uint8_t message[0x18]{};
         using StringCopyFn = void(__fastcall*)(uintptr_t, uintptr_t, int);
         using SerializeFn = void(__fastcall*)(void*, uintptr_t, uintptr_t);
@@ -76,6 +96,6 @@ namespace usercmd_apply {
             reinterpret_cast<uintptr_t>(buf), static_cast<int>(out - buf));
         reinterpret_cast<SerializeFn>(p.serializeMoveCrc)(reinterpret_cast<void*>(base + 0x20),
             reinterpret_cast<uintptr_t>(message), arena);
-        return true;
+        return kStageOk;
     }
 }
