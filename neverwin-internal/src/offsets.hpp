@@ -15,13 +15,13 @@ namespace offsets {
 
     struct Offsets {
         // --- client.dll ---
-        std::uintptr_t dwEntityList      = 0x2572230; // build 14177
-        std::uintptr_t dwLocalPlayerPawn = 0x23C7268;
-        std::uintptr_t dwViewAngles      = 0x23DD308;
-        std::uintptr_t dwViewMatrix      = 0x23CC830; // build 14177
-        std::uintptr_t dwGlobalVars      = 0x20B05F0; // build 14177; curtime +0x30, frametime +0x08
-        std::uintptr_t dwLocalPlayerController = 0x23A1F30;
-        std::uintptr_t dwCSGOInput       = 0x23DCC80;
+        std::uintptr_t dwEntityList      = 0x2571220; // build 14178
+        std::uintptr_t dwLocalPlayerPawn = 0x23C6268;
+        std::uintptr_t dwViewAngles      = 0x23DC2F8;
+        std::uintptr_t dwViewMatrix      = 0x23CB830; // build 14178
+        std::uintptr_t dwGlobalVars      = 0x20AF5F0; // build 14178; curtime +0x30, frametime +0x08
+        std::uintptr_t dwLocalPlayerController = 0x23A0F30;
+        std::uintptr_t dwCSGOInput       = 0x23DBC70;
         // CGameEntitySystem::m_hHighestEntityIndex. Нужен только запасному
         // scanner-у F1, когда controller->m_hPlayerPawn временно не резолвится.
         std::uintptr_t highestEntityIndexOffset = 0x2090;

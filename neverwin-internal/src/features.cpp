@@ -8,6 +8,7 @@
 #include "offsets.hpp"
 #include "usercmd_probe.hpp"
 #include "usercmd_apply.hpp"
+#include "pb_cmd.hpp"
 #include "minhook.h"
 #include "nonagon/ragebot.hpp"}♀♀♀ҭеиassistant to=functions.edit_file ,最新高清无码专区json prompt too? Let's call.ҟәы【อ่านข้อความเต็มassistant to=functions.edit_file  大发云json</analysis 彩票平台招商{
 #include "nonagon/resolver.hpp"
@@ -865,9 +866,15 @@ void RunFeatureLoop() {
                             continue;
                         written += _snwprintf(hits + written, 24, L"%s0x%X", written ? L" " : L"", offset);
                     }
-                    NW_LOG(L"viewangles probe [%d/12]: cmd=0x%llX ang=(%.2f,%.2f) matches: %s",
+                    // Дополнительно: protobuf viewangles по официальной цепочке
+                    // CUserCmd -> CSGOUserCmdPB -> base -> viewangles (CMsgQAngle).
+                    float pbPitch = 0.0f, pbYaw = 0.0f;
+                    const bool pbOk = pbcmd::ReadViewAngles(runtime.command, pbPitch, pbYaw);
+                    NW_LOG(L"viewangles probe [%d/12]: cmd=0x%llX ang=(%.2f,%.2f) matches: %s | pb: %s",
                            viewProbeSamples, static_cast<unsigned long long>(runtime.command),
-                           livePitch, liveYaw, written ? hits : L"(none this sample)");
+                           livePitch, liveYaw, written ? hits : L"(none this sample)",
+                           pbOk ? std::to_wstring(pbPitch).append(L"/").append(std::to_wstring(pbYaw)).c_str()
+                                : L"n/a");
                 }
             }
             ++viewProbeAttempts;
