@@ -14,11 +14,16 @@ struct Features {
     // speed — максимум градусов в секунду, smooth — время сглаживания в мс.
     std::atomic<float> reverseAimSpeed{720.0f};
     std::atomic<float> reverseAimSmooth{0.0f};
+    // Сколько раз в секунду аимбот обновляет углы (1..120), а не «на сколько
+    // градусов» он шагает. Реальный интервал между обновлениями = 1000/rate.
+    std::atomic<int> reverseAimRate{120};
+    std::atomic<bool> reverseAimTrigger{false}; // триггербот в обычном аимботе
     std::atomic<float> reverseAimPrediction{0.12f}; // секунд вперёд по velocity цели
     std::atomic<bool> antiAimless{false};  // F2 — взгляд в пол при видимом враге
     std::atomic<float> spinSpeed{1.0f};    // скорость спинбота F2: 0..10 (множитель)
     std::atomic<bool> visualRecoil{false}; // F3 — отдача x4
     std::atomic<bool> bhop{false};         // F4 — обычный auto-bhop при удержании SPACE
+    std::atomic<bool> extHope{false};      // ExtHope — burst 10-15 press в момент приземления
     std::atomic<bool> gamesense{true};     // F5 — рандомный дроп оружия (20%)
     std::atomic<bool> clanTag{false};      // animated [NeverWin] + base name
     std::atomic<bool> espEnabled{false};   // box ESP через view matrix

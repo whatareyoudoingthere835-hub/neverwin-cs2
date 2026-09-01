@@ -348,6 +348,11 @@ namespace {
             if (ImGui::SliderFloat("Aim speed (deg/s)", &speed, 30.f, 8000.f, "%.0f")) g_features.reverseAimSpeed.store(speed);
             float smooth = g_features.reverseAimSmooth.load();
             if (ImGui::SliderFloat("Aim smooth (ms)", &smooth, 0.f, 500.f, "%.0f")) g_features.reverseAimSmooth.store(smooth);
+            int rate = g_features.reverseAimRate.load();
+            if (ImGui::SliderInt("Aim updates per second", &rate, 1, 120)) g_features.reverseAimRate.store(rate);
+            ImGui::TextDisabled("Warning: high update rates may cause lag.");
+            bool trig = g_features.reverseAimTrigger.load();
+            if (ImGui::Checkbox("Triggerbot", &trig)) g_features.reverseAimTrigger.store(trig);
             float pred = g_features.reverseAimPrediction.load();
             if (ImGui::SliderFloat("Position prediction (s)", &pred, 0.f, .35f, "%.3f")) g_features.reverseAimPrediction.store(pred);
             ImGui::Spacing(); ImGui::Separator();
@@ -378,6 +383,8 @@ namespace {
         } else if (page == 1) {
             bool bhop = g_features.bhop.load();
                 if (ImGui::Checkbox("VeloBhop [F4]", &bhop)) g_features.bhop.store(bhop);
+                bool ext = g_features.extHope.load();
+                if (ImGui::Checkbox("ExtHope (burst landing presses)", &ext)) g_features.extHope.store(ext);
                 ImGui::TextDisabled("Velocity CreateMove / CUserCmd path.");
         } else if (page == 2) {
             ImGui::TextColored(accent, "tg: @fkfwj");

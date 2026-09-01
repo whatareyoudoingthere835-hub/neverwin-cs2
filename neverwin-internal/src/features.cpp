@@ -120,6 +120,36 @@ namespace {
             // обходит sv_jump_spam_penalty_time — источник нестабильного bhop.
             if (wasInAir) {
                 wasInAir = false;
+                // ExtHope: как externals — «дробь» из 10-15 виртуальных нажатий
+                // SPACE вокруг момента приземления, чтобы движок засчитал
+                // удачный bhop и не гасил скорость. Каждое нажатие = своя
+                // subtick-пара release/press со сдвигом по времени.
+                if (g_features.extHope.load()) {
+                    const uintptr_t globalVarsE = mem::Read<uintptr_t>(clientBase + off.dwGlobalVars);
+                    if (globalVarsE) {
+                        const float curtimeE = mem::ReadFast<float>(globalVarsE + 0x30);
+                        const float frametimeE = mem::ReadFast<float>(globalVarsE + 0x08);
+                        if (curtimeE > 0.0f && frametimeE > 0.0f) {
+                            const uintptr_t cmdE = runtime.command;
+                            int added = 0;
+                            constexpr float kStep = 1.0f / 64.0f; // шаг между нажатиями
+                            for (int i = 0; i < 12; ++i) {
+                                const float t = curtimeE - frametimeE + kStep * static_cast<float>(i);
+                                if (usercmd_apply::AddJumpSubtickPair(cmdE, t, t + kStep * 0.5f,
+                                                                      g_userCmdPatterns))
+                                    ++added;
+                                else
+                                    break;
+                            }
+                            static int loggedExt = 0;
+                            if (loggedExt < 3) {
+                                ++loggedExt;
+                                NW_LOG(L"exthope: burst %d subtick press(es) at landing.", added);
+                            }
+                        }
+                    }
+                    // базовый bhop-пресс тоже оставляем
+                }
                 const uintptr_t globalVars = mem::Read<uintptr_t>(clientBase + off.dwGlobalVars);
                 if (globalVars) {
                     const float curtime = mem::ReadFast<float>(globalVars + 0x30);
@@ -624,6 +654,18 @@ namespace {
         dy *= response;
 
         const float maxStep = std::max(1.0f, g_features.reverseAimSpeed.load() * dt);
+
+        // Rate limiting: сколько раз в СЕКУНДУ аим двигает углы (1..120), а не
+        // шаг в градусах. Между разрешёнными обновлениями углы не трогаем —
+        // игра получает плавную «человеческую» серию поворотов.
+        static DWORD lastAimUpdate = 0;
+        const DWORD nowMs = GetTickCount();
+        const int rate = std::clamp(g_features.reverseAimRate.load(), 1, 120);
+        const DWORD minInterval = 1000u / static_cast<DWORD>(rate);
+        if (minInterval && nowMs - lastAimUpdate < minInterval)
+            return current; // пропускаем обновление, камера остаётся на месте
+        lastAimUpdate = nowMs;
+
         const float length = std::sqrtf(dp * dp + dy * dy);
         if (length > maxStep) {
             const float scale = maxStep / length;
@@ -1065,6 +1107,25 @@ void RunFeatureLoop() {
                     if (raimMode == 1 || !viaCmd) {
                         mem::Write<float>(viewAnglesPtr, angles.x);
                         mem::Write<float>(viewAnglesPtr + 4, angles.y);
+                    }
+
+                    // Triggerbot обычного аимбота: стреляем только когда движок
+                    // сам подтвердил цель под прицелом (m_iIDEntIndex).
+                    if (g_features.reverseAimTrigger.load()) {
+                        const int idIndex = mem::Read<int>(localPlayer + off.m_iIDEntIndex);
+                        if (idIndex > 0) {
+                            const uintptr_t crosshairPawn = ent::GetEntityByIndex(entityList, static_cast<uint32_t>(idIndex));
+                            if (crosshairPawn && crosshairPawn != localPlayer &&
+                                ent::IsPawnAlive(crosshairPawn)) {
+                                INPUT shot{};
+                                shot.type = INPUT_MOUSE;
+                                shot.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+                                if (SendInput(1, &shot, sizeof(INPUT)) == 1) {
+                                    shot.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+                                    SendInput(1, &shot, sizeof(INPUT));
+                                }
+                            }
+                        }
                     }
 
                     static uint32_t lastLog = 0;
