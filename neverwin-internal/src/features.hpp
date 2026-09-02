@@ -18,6 +18,7 @@ struct Features {
     // градусов» он шагает. Реальный интервал между обновлениями = 1000/rate.
     std::atomic<int> reverseAimRate{120};
     std::atomic<bool> reverseAimTrigger{false}; // триггербот в обычном аимботе
+    std::atomic<bool> silentAim{false};         // углы только в usercmd, камеру не трогаем
     std::atomic<float> reverseAimPrediction{0.12f}; // секунд вперёд по velocity цели
     std::atomic<bool> antiAimless{false};  // F2 — взгляд в пол при видимом враге
     std::atomic<float> spinSpeed{1.0f};    // скорость спинбота F2: 0..10 (множитель)

@@ -353,6 +353,8 @@ namespace {
             ImGui::TextDisabled("Warning: high update rates may cause lag.");
             bool trig = g_features.reverseAimTrigger.load();
             if (ImGui::Checkbox("Triggerbot", &trig)) g_features.reverseAimTrigger.store(trig);
+            bool silent = g_features.silentAim.load();
+            if (ImGui::Checkbox("Silent aim (usercmd only)", &silent)) g_features.silentAim.store(silent);
             float pred = g_features.reverseAimPrediction.load();
             if (ImGui::SliderFloat("Position prediction (s)", &pred, 0.f, .35f, "%.3f")) g_features.reverseAimPrediction.store(pred);
             ImGui::Spacing(); ImGui::Separator();

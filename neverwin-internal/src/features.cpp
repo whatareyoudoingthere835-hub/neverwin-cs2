@@ -1101,10 +1101,30 @@ void RunFeatureLoop() {
                         }
                     }
 
+                    // Silent aim: углы уходят ТОЛЬКО в protobuf usercmd
+                    // (CUserCmd -> CSGOUserCmdPB -> base -> viewangles),
+                    // подтверждённая цепочка из официальных PB-хедеров.
+                    // dwViewAngles не трогаем — камера у игрока стоит на месте.
+                    if (g_features.silentAim.load()) {
+                        if (localController && g_userCmdPatterns.ReadyForRead()) {
+                            const auto rt = usercmd_probe::InspectRuntime(localController, g_userCmdPatterns);
+                            if (rt.command && pbcmd::WriteViewAngles(rt.command, angles.x, angles.y)) {
+                                static uint32_t lastSilentLog = 0;
+                                const uint32_t nowS = GetTickCount();
+                                if (nowS - lastSilentLog > 5000) {
+                                    lastSilentLog = nowS;
+                                    NW_LOG(L"silent: углы (%.1f, %.1f) записаны в usercmd, камера нетронута.",
+                                           angles.x, angles.y);
+                                }
+                            }
+                        }
+                        // При включённом silent прямая запись viewAngles
+                        // выполняться не должна ни при каких условиях.
+                    }
                     // raimv1: только прямая запись. raimv2: юзеркоманда +
                     // подстраховка прямой записью (команда — главный канал,
                     // viewAngles — если игра уже применила кадр).
-                    if (raimMode == 1 || !viaCmd) {
+                    else if (raimMode == 1 || !viaCmd) {
                         mem::Write<float>(viewAnglesPtr, angles.x);
                         mem::Write<float>(viewAnglesPtr + 4, angles.y);
                     }
