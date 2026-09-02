@@ -386,7 +386,9 @@ namespace {
             bool bhop = g_features.bhop.load();
                 if (ImGui::Checkbox("VeloBhop [F4]", &bhop)) g_features.bhop.store(bhop);
                 bool ext = g_features.extHope.load();
-                if (ImGui::Checkbox("ExtHope (burst landing presses)", &ext)) g_features.extHope.store(ext);
+                if (ImGui::Checkbox("ExtHope (hold X)", &ext)) g_features.extHope.store(ext);
+                int extRate = g_features.extHopeRate.load();
+                if (ImGui::SliderInt("ExtHope jumps per second", &extRate, 1, 128)) g_features.extHopeRate.store(extRate);
                 ImGui::TextDisabled("Velocity CreateMove / CUserCmd path.");
         } else if (page == 2) {
             ImGui::TextColored(accent, "tg: @fkfwj");

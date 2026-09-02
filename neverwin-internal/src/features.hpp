@@ -24,7 +24,8 @@ struct Features {
     std::atomic<float> spinSpeed{1.0f};    // скорость спинбота F2: 0..10 (множитель)
     std::atomic<bool> visualRecoil{false}; // F3 — отдача x4
     std::atomic<bool> bhop{false};         // F4 — обычный auto-bhop при удержании SPACE
-    std::atomic<bool> extHope{false};      // ExtHope — burst 10-15 press в момент приземления
+    std::atomic<bool> extHope{false};      // ExtHope — спам кликов SPACE пока зажат X
+    std::atomic<int>  extHopeRate{32};    // прыжков (кликов) в секунду, 1..128
     std::atomic<bool> gamesense{true};     // F5 — рандомный дроп оружия (20%)
     std::atomic<bool> clanTag{false};      // animated [NeverWin] + base name
     std::atomic<bool> espEnabled{false};   // box ESP через view matrix

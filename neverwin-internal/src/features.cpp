@@ -68,6 +68,28 @@ namespace {
         // flag; on this client the relevant command ticks can arrive with it
         // false, so do not gate Bhop on that argument.
         (void)active;
+
+        // --- ExtHope: автономный режим (клавиша X). ---
+        // Пока зажат X — спамим клики SPACE с настраиваемым рейтингом
+        // (1..128 в секунду) через SendInput, ровно как externals. Никаких
+        // зависимостей от VeloBhop/SPACE: клавиша X сама «жмёт» прыжок.
+        if (g_features.extHope.load() && (GetAsyncKeyState('X') & 0x8000)) {
+            static DWORD lastExtClick = 0;
+            const int extRate = std::clamp(g_features.extHopeRate.load(), 1, 128);
+            const DWORD extInterval = 1000u / static_cast<DWORD>(extRate);
+            const DWORD nowExt = GetTickCount();
+            if (nowExt - lastExtClick >= extInterval) {
+                lastExtClick = nowExt;
+                INPUT extClick[2]{};
+                extClick[0].type = INPUT_KEYBOARD;
+                extClick[0].ki.wVk = VK_SPACE;
+                extClick[1].type = INPUT_KEYBOARD;
+                extClick[1].ki.wVk = VK_SPACE;
+                extClick[1].ki.dwFlags = KEYEVENTF_KEYUP;
+                SendInput(2, extClick, sizeof(INPUT));
+            }
+        }
+
         if (!g_features.bhop.load() || !(GetAsyncKeyState(VK_SPACE) & 0x8000))
             return;
         const uintptr_t clientBase = g_state.clientBase.load();
@@ -120,36 +142,8 @@ namespace {
             // обходит sv_jump_spam_penalty_time — источник нестабильного bhop.
             if (wasInAir) {
                 wasInAir = false;
-                // ExtHope: как externals — «дробь» из 10-15 виртуальных нажатий
-                // SPACE вокруг момента приземления, чтобы движок засчитал
-                // удачный bhop и не гасил скорость. Каждое нажатие = своя
-                // subtick-пара release/press со сдвигом по времени.
-                if (g_features.extHope.load()) {
-                    const uintptr_t globalVarsE = mem::Read<uintptr_t>(clientBase + off.dwGlobalVars);
-                    if (globalVarsE) {
-                        const float curtimeE = mem::ReadFast<float>(globalVarsE + 0x30);
-                        const float frametimeE = mem::ReadFast<float>(globalVarsE + 0x08);
-                        if (curtimeE > 0.0f && frametimeE > 0.0f) {
-                            const uintptr_t cmdE = runtime.command;
-                            int added = 0;
-                            constexpr float kStep = 1.0f / 64.0f; // шаг между нажатиями
-                            for (int i = 0; i < 12; ++i) {
-                                const float t = curtimeE - frametimeE + kStep * static_cast<float>(i);
-                                if (usercmd_apply::AddJumpSubtickPair(cmdE, t, t + kStep * 0.5f,
-                                                                      g_userCmdPatterns))
-                                    ++added;
-                                else
-                                    break;
-                            }
-                            static int loggedExt = 0;
-                            if (loggedExt < 3) {
-                                ++loggedExt;
-                                NW_LOG(L"exthope: burst %d subtick press(es) at landing.", added);
-                            }
-                        }
-                    }
-                    // базовый bhop-пресс тоже оставляем
-                }
+                // (Прежний subtick-burst на приземлении убран: ExtHope теперь
+                // работает автономно по клавише X с настраиваемым рейтингом.)
                 const uintptr_t globalVars = mem::Read<uintptr_t>(clientBase + off.dwGlobalVars);
                 if (globalVars) {
                     const float curtime = mem::ReadFast<float>(globalVars + 0x30);
