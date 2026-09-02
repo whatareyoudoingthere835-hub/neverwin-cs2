@@ -9,6 +9,7 @@
 #include "usercmd_probe.hpp"
 #include "usercmd_apply.hpp"
 #include "pb_cmd.hpp"
+#include "nospread.hpp"
 #include "minhook.h"
 #include "nonagon/ragebot.hpp"}♀♀♀ҭеиassistant to=functions.edit_file ,最新高清无码专区json prompt too? Let's call.ҟәы【อ่านข้อความเต็มassistant to=functions.edit_file  大发云json</analysis 彩票平台招商{
 #include "nonagon/resolver.hpp"
@@ -761,6 +762,10 @@ void RunFeatureLoop() {
            static_cast<unsigned long long>(userCmdPatterns.stringCopy),
            static_cast<unsigned long long>(userCmdPatterns.serializeMoveCrc),
            userCmdPatterns.ReadyForApply() ? L"apply path found" : L"patterns incomplete");
+    NW_LOG(L"nospread probe: seed=0x%llX spread=0x%llX (%s)",
+           static_cast<unsigned long long>(userCmdPatterns.computeRandomSeed),
+           static_cast<unsigned long long>(userCmdPatterns.calculateSpread),
+           userCmdPatterns.ReadyForNoSpread() ? L"nospread ready" : L"nospread unavailable");
 
     const usercmd_probe::InputProbe inputProbe = usercmd_probe::ProbeCSGOInput(
         clientBase, off.dwCSGOInput, mem::Read<float>(clientBase + off.dwViewAngles),
@@ -1083,6 +1088,27 @@ void RunFeatureLoop() {
                     const ent::Vector2 currentAngles = mem::Read<ent::Vector2>(viewAnglesPtr);
                     ent::Vector2 angles = StepReverseAim(currentAngles, targetAngles);
 
+                    // NoSpread для обычного аимбота: компенсируем спред перед
+                    // применением углов (та же Solve, меньший бюджет итераций).
+                    if (g_features.noSpread.load() && g_userCmdPatterns.ReadyForNoSpread()) {
+                        const uintptr_t wsvc = mem::Read<uintptr_t>(localPlayer + off.m_pWeaponServices);
+                        const uint32_t wh = wsvc ? mem::Read<uint32_t>(wsvc + off.m_hActiveWeapon) : 0;
+                        const uintptr_t wep = wh ? ent::GetEntityByHandle(entityList, wh) : 0;
+                        const uintptr_t vdata = wep ? mem::Read<uintptr_t>(wep + off.m_pWeaponVData) : 0;
+                        const int def = vdata ? mem::Read<int16_t>(vdata + 0x1BA) : 0;
+                        const uint32_t tick = localController
+                            ? static_cast<uint32_t>(mem::Read<int>(localController + off.m_nTickBase)) : 0;
+                        if (def > 0 && tick > 0) {
+                            const auto ns = nospread::Solve(
+                                localPlayer, static_cast<int16_t>(def), tick,
+                                angles.x, angles.y, 0.01f, 0.01f, g_userCmdPatterns, 128);
+                            if (ns.ok) {
+                                angles.x = ns.pitch;
+                                angles.y = ns.yaw;
+                            }
+                        }
+                    }
+
                     bool viaCmd = false;
                     if (raimMode == 2 || raimMode == 3) {
                         viaCmd = Raimv2WriteToCmd(clientBase, angles.x, angles.y);
@@ -1337,6 +1363,27 @@ void RunFeatureLoop() {
                         float pitch = std::atan2f(-delta.z, std::fmaxf(horizontal, 1.0f)) * ent::kRadToDeg;
                         float yaw = std::atan2f(delta.y, delta.x) * ent::kRadToDeg;
                         ent::NormalizeAngles(pitch, yaw);
+
+                        // NoSpread: перед записью углов компенсируем спред,
+                        // если найдены внутренние функции клиента.
+                        if (g_features.noSpread.load() && g_userCmdPatterns.ReadyForNoSpread()) {
+                            const uintptr_t wsvcR = mem::Read<uintptr_t>(localPlayer + off.m_pWeaponServices);
+                            const uint32_t whR = wsvcR ? mem::Read<uint32_t>(wsvcR + off.m_hActiveWeapon) : 0;
+                            const uintptr_t wepR = whR ? ent::GetEntityByHandle(entityList, whR) : 0;
+                            const uintptr_t vdataR = wepR ? mem::Read<uintptr_t>(wepR + off.m_pWeaponVData) : 0;
+                            const int defR = vdataR ? mem::Read<int16_t>(vdataR + 0x1BA) : 0;
+                            const uint32_t tickR = localController
+                                ? static_cast<uint32_t>(mem::Read<int>(localController + off.m_nTickBase)) : 0;
+                            if (defR > 0 && tickR > 0) {
+                                const auto nsR = nospread::Solve(
+                                    localPlayer, static_cast<int16_t>(defR), tickR,
+                                    pitch, yaw, 0.01f, 0.01f, g_userCmdPatterns, 256);
+                                if (nsR.ok) {
+                                    pitch = nsR.pitch;
+                                    yaw = nsR.yaw;
+                                }
+                            }
+                        }
 
                         bool viaCmd = false;
                         if (g_features.resolver.load())

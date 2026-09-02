@@ -13,9 +13,12 @@ namespace usercmd_probe {
         uintptr_t utlVectorPush = 0;
         uintptr_t stringCopy = 0;
         uintptr_t serializeMoveCrc = 0;
+        uintptr_t computeRandomSeed = 0;
+        uintptr_t calculateSpread = 0;
 
         bool ReadyForRead() const { return getUserCmd && getUserCmdBase; }
         bool ReadyForApply() const { return ReadyForRead() && stringCopy && serializeMoveCrc; }
+        bool ReadyForNoSpread() const { return computeRandomSeed && calculateSpread; }
     };
 
     inline size_t ModuleSize(HMODULE module) {
@@ -272,6 +275,22 @@ namespace usercmd_probe {
         if (const uintptr_t found = FindBytes(client, kStringCopy, kStringCopyMask, sizeof(kStringCopy)))
             out.stringCopy = ResolveRelativeCall(found);
         out.serializeMoveCrc = FindBytes(client, kSerializeCrc, kSerializeCrcMask, sizeof(kSerializeCrc));
+
+        // NoSpread helpers (signatures from the UGame NoSpread source, "updated" marks).
+        // ComputeRandomSeed: client.dll "48 89 5C 24 ? 57 48 81 EC ? ? ? ? 48 8B F9 41 8B ?"
+        static const uint8_t kComputeSeed[] = {
+            0x48,0x89,0x5C,0x24,0,0x57,0x48,0x81,0xEC,0,0,0,0,0x48,0x8B,0xF9,
+            0x41,0x8B,0
+        };
+        static const char kComputeSeedMask[] = "xxxx?xxxx????xxx xx";
+        out.computeRandomSeed = FindBytes(client, kComputeSeed, kComputeSeedMask, sizeof(kComputeSeed));
+        // CalculateSpread: client.dll "48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 4C 63 EA"
+        static const uint8_t kCalcSpread[] = {
+            0x48,0x8B,0xC4,0x48,0x89,0x58,0,0x48,0x89,0x68,0,0x48,0x89,0x70,0,0x57,
+            0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x81,0xEC,0,0,0,0,0x4C,0x63,0xEA
+        };
+        static const char kCalcSpreadMask[] = "xxxxxx?xxxxx?xxxx xxxxxxxx????xxxxxxxxx";
+        out.calculateSpread = FindBytes(client, kCalcSpread, kCalcSpreadMask, sizeof(kCalcSpread));
         return out;
     }
 } // namespace usercmd_probe
