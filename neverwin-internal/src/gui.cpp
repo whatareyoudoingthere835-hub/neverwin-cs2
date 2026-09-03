@@ -1,4 +1,6 @@
 #include "pch.h"
+#include <chrono>
+#include <algorithm>
 #include "gui.hpp"
 #include "features.hpp"
 #include "log.hpp"
@@ -232,31 +234,44 @@ namespace {
 
     void DrawEsp(uintptr_t clientBase, uintptr_t entityList, uintptr_t localPlayer,
                  uint8_t localTeam) {
-        if (!g_features.espEnabled.load())
+        if (!g_features.espEnabled.load() || !localPlayer || !clientBase)
             return;
 
-        // Скан игроков дорогой (64 слота с безопасными чтениями) — делаем его
-        // максимум 10 раз в секунду и кешируем мировые координаты. Раньше он
-        // шёл каждый кадр в Present и ронял FPS. Если entity layout не
-        // подтверждён рантаймом, скан не запускается вовсе.
+        // Скан игроков дорогой (64 слота с безопасными чтениями) — 50 мс (20 Гц),
+        // не каждый кадр. Если entity layout не подтверждён рантаймом, скан
+        // не запускается вовсе.
         struct EspTarget {
             ent::Vector3 head, feet;
             int health;
+            float distance;
         };
         static std::vector<EspTarget> cache;
-        static DWORD lastScan = 0;
-        const DWORD now = GetTickCount();
-        if (now - lastScan >= 100) {
+        static std::chrono::steady_clock::time_point lastScan{};
+        const auto now = std::chrono::steady_clock::now();
+        if (now - lastScan >= std::chrono::milliseconds(50)) {
             lastScan = now;
             cache.clear();
             if (g_state.entityLayoutVerified.load() && entityList) {
+                const float lx = g_state.localOriginX.load();
+                const float ly = g_state.localOriginY.load();
+                const float lz = g_state.localOriginZ.load();
                 ent::ForEachPlayer(entityList, [&](const ent::PlayerSnapshot& player) {
                     if (player.pawn == localPlayer || player.team == localTeam || !player.IsAlive())
                         return;
+                    const float dx = player.origin.x - lx;
+                    const float dy = player.origin.y - ly;
+                    const float dz = player.origin.z - lz;
+                    const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    if (dist > 3000.0f)
+                        return; // дальше ~3000 юнитов не рисуем
                     cache.push_back({ { player.origin.x, player.origin.y, player.origin.z + 72.0f },
                                       player.origin,
-                                      player.health });
+                                      player.health,
+                                      dist });
                 });
+                // Дальние рисуем первыми, ближние поверх них.
+                std::sort(cache.begin(), cache.end(),
+                          [](const EspTarget& a, const EspTarget& b) { return a.distance > b.distance; });
             }
         }
 
@@ -273,19 +288,26 @@ namespace {
             if (!WorldToScreen(target.feet, bottom, matrix, width, height)) continue;
             const float boxHeight = bottom.y - top.y;
             if (boxHeight < 6.0f) continue;
-            const float boxWidth = boxHeight * 0.45f;
+            const float boxWidth = boxHeight * 0.38f;
             const float left = top.x - boxWidth * 0.5f;
             const float right = top.x + boxWidth * 0.5f;
-            const ImU32 accent = IM_COL32(235, 60, 70, 230);
-            const ImU32 shadow = IM_COL32(0, 0, 0, 200);
+
+            const float healthFrac = std::clamp(target.health, 0, 100) / 100.0f;
+            const ImU32 color = IM_COL32((int)(255 * (1.0f - healthFrac)),
+                                         (int)(255 * healthFrac), 50, 230);
+            const ImU32 shadow = IM_COL32(0, 0, 0, 180);
+
             draw->AddRect({left + 1, top.y + 1}, {right + 1, bottom.y + 1}, shadow, 0.f, 0, 2.0f);
-            draw->AddRect({left, top.y}, {right, bottom.y}, accent, 0.f, 0, 1.5f);
+            draw->AddRect({left, top.y}, {right, bottom.y}, color, 0.f, 0, 1.5f);
+
             if (g_features.espHealth.load()) {
-                const float fraction = std::clamp(target.health, 0, 100) / 100.0f;
-                const ImU32 health = IM_COL32((int)(255 * (1.f - fraction)),
-                                              (int)(210 * fraction), 50, 255);
                 draw->AddRectFilled({left - 5.0f, bottom.y},
-                                    {left - 2.0f, bottom.y - boxHeight * fraction}, health);
+                                    {left - 2.0f, bottom.y - boxHeight * healthFrac}, color);
+            }
+            if (g_features.espDistance.load()) {
+                char distText[32];
+                snprintf(distText, sizeof(distText), "%.0fm", target.distance / 52.49f);
+                draw->AddText({left, bottom.y + 2.0f}, IM_COL32(255, 255, 255, 200), distText);
             }
         }
     }
@@ -404,6 +426,8 @@ namespace {
             if (esp) {
                 bool health = g_features.espHealth.load();
                 if (ImGui::Checkbox("ESP health bar", &health)) g_features.espHealth.store(health);
+                bool dist = g_features.espDistance.load();
+                if (ImGui::Checkbox("ESP distance", &dist)) g_features.espDistance.store(dist);
             }
         } else {
             bool recoil = g_features.visualRecoil.load();

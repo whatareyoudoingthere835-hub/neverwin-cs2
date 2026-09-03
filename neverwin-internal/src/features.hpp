@@ -31,6 +31,7 @@ struct Features {
     std::atomic<bool> clanTag{false};      // animated [NeverWin] + base name
     std::atomic<bool> espEnabled{false};   // box ESP через view matrix
     std::atomic<bool> espHealth{true};     // полоска HP рядом с боксом
+    std::atomic<bool> espDistance{true};   // дистанция в метрах под боксом
     // Nonagon ragebot (F6)
     std::atomic<bool> ragebot{false};      // F6 — рейджбот с резолвером из nonagon
     std::atomic<bool> rageAutoFire{true};  // автоогонь/триггер после подтверждения живой цели
@@ -51,6 +52,10 @@ struct DebugState {
     std::atomic<bool>      viewAnglesWritable{false};
     std::atomic<bool>      offsetsFromIni{false}; // true = оффсеты из neverwin.ini
     std::atomic<bool>      entityLayoutVerified{false}; // runtime entity layout подтверждён
+    // Мировая позиция локального павна для ESP-дистанции (обновляет feature loop).
+    std::atomic<float>     localOriginX{0.0f};
+    std::atomic<float>     localOriginY{0.0f};
+    std::atomic<float>     localOriginZ{0.0f};
 };
 
 extern Features   g_features;

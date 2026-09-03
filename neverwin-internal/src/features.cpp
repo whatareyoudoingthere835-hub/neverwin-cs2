@@ -999,6 +999,17 @@ void RunFeatureLoop() {
 
         const uint8_t localTeam = ent::GetTeam(localPlayer);
         g_state.localTeam.store(localTeam);
+        // Позиция локального павна для ESP-дистанции (обновляем каждый проход,
+        // это одно дешёвое чтение scene node — уже прочитано в GetEyePosition).
+        {
+            const uintptr_t sceneNode = mem::Read<uintptr_t>(localPlayer + off.m_pGameSceneNode);
+            if (sceneNode) {
+                const ent::Vector3 origin = mem::Read<ent::Vector3>(sceneNode + off.m_vecAbsOrigin);
+                g_state.localOriginX.store(origin.x);
+                g_state.localOriginY.store(origin.y);
+                g_state.localOriginZ.store(origin.z);
+            }
+        }
 
         // --- 1. VeloBhop ---
         // Реальная запись выполняется только в HookedCreateMove, после того
