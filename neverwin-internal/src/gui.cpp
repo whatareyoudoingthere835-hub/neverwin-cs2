@@ -248,6 +248,8 @@ namespace {
         };
         static std::vector<EspTarget> cache;
         static std::chrono::steady_clock::time_point lastScan{};
+        static std::chrono::steady_clock::time_point lastDiag{};
+        static int diagEnemies = 0, diagTooFar = 0;
         const auto now = std::chrono::steady_clock::now();
         if (now - lastScan >= std::chrono::milliseconds(50)) {
             lastScan = now;
@@ -256,29 +258,67 @@ namespace {
                 const float lx = g_state.localOriginX.load();
                 const float ly = g_state.localOriginY.load();
                 const float lz = g_state.localOriginZ.load();
+                // Дальность и «своих рисуем или нет» — из меню.
+                const float maxDist = g_features.espMaxDistance.load();
+                const bool drawTeammates = g_features.espTeammates.load();
+                int enemies = 0, tooFar = 0;
                 ent::ForEachPlayer(entityList, [&](const ent::PlayerSnapshot& player) {
-                    if (player.pawn == localPlayer || player.team == localTeam || !player.IsAlive())
+                    if (player.pawn == localPlayer || !player.IsAlive())
                         return;
+                    if (!drawTeammates && player.team == localTeam)
+                        return;
+                    if (player.team != 0 && player.team != localTeam)
+                        ++enemies;
                     const float dx = player.origin.x - lx;
                     const float dy = player.origin.y - ly;
                     const float dz = player.origin.z - lz;
                     const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-                    if (dist > 3000.0f)
-                        return; // дальше ~3000 юнитов не рисуем
+                    if (dist > maxDist) {
+                        ++tooFar;
+                        return;
+                    }
                     cache.push_back({ { player.origin.x, player.origin.y, player.origin.z + 72.0f },
                                       player.origin,
                                       player.health,
                                       dist });
                 });
+                diagEnemies = enemies;
+                diagTooFar = tooFar;
                 // Дальние рисуем первыми, ближние поверх них.
                 std::sort(cache.begin(), cache.end(),
                           [](const EspTarget& a, const EspTarget& b) { return a.distance > b.distance; });
             }
         }
 
+        // Диагностика «ESP что-то рисует / не рисует»: если включён, но
+        // боксов нет, раз в 2 сек пишем в лог, ПОЧЕМУ.
+        if (cache.empty() && now - lastDiag >= std::chrono::seconds(2)) {
+            lastDiag = now;
+            if (!g_state.entityLayoutVerified.load())
+                NW_LOG(L"esp: ничего не рисую — entity layout не подтверждён рантаймом (строка 'entity-list:' в логе). До подтверждения боксов не будет, а fallback-оффсеты могут рисовать мусорные боксы «не на игроках».");
+            else if (g_state.localTeam.load() == 0)
+                NW_LOG(L"esp: ничего не рисую — local team не прочитан (вне матча?).");
+            else
+                NW_LOG(L"esp: layout ok, целей в радиусе %.0f м нет (врагов вокруг %d, вне радиуса %d). Своих включи 'ESP teammates'.",
+                       g_features.espMaxDistance.load() / 52.49f, diagEnemies, diagTooFar);
+        }
+
         float matrix[16];
         if (!mem::ReadArray<float>(clientBase + offsets::g.dwViewMatrix, matrix, 16))
             return;
+        // Здороовье view matrix: первая строка — единичный вектор камеры.
+        // Если dwViewMatrix стух (обновили CS2 без ini), W2S проецирует в
+        // мусор — боксы «не на игроках». Логируем один раз.
+        static bool matrixWarned = false;
+        if (!matrixWarned) {
+            const float row0Len = std::sqrtf(matrix[0] * matrix[0] +
+                                              matrix[1] * matrix[1] +
+                                              matrix[2] * matrix[2]);
+            if (row0Len < 0.5f || row0Len > 1.5f) {
+                matrixWarned = true;
+                NW_LOG(L"WARNING esp: view matrix выглядит битой (|row0|=%.2f) — боксы будут не на игроках. Обнови neverwin.ini (dwViewMatrix).", row0Len);
+            }
+        }
         const float width = ImGui::GetIO().DisplaySize.x;
         const float height = ImGui::GetIO().DisplaySize.y;
         ImDrawList* draw = ImGui::GetBackgroundDrawList();
@@ -335,7 +375,11 @@ namespace {
         const float h = ImGui::GetIO().DisplaySize.y;
         const ImVec2 menuSize(780.0f, 540.0f);
         ImGui::SetNextWindowSize(menuSize, ImGuiCond_Always);
-        ImGui::SetNextWindowPos(ImVec2((w - menuSize.x) * 0.5f, (h - menuSize.y) * 0.35f), ImGuiCond_Always);
+        // Клампим позицию: окно целиком внутри игрового окна, sidebar слева
+        // не вылезает за экран на мелких разрешениях.
+        const float mx = std::clamp((w - menuSize.x) * 0.5f, 0.0f, std::max(0.0f, w - menuSize.x));
+        const float my = std::clamp((h - menuSize.y) * 0.35f, 0.0f, std::max(0.0f, h - menuSize.y));
+        ImGui::SetNextWindowPos(ImVec2(mx, my), ImGuiCond_Always);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
         ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.10f, 0.10f, 0.10f, 1.0f)); // #1a1a1a
@@ -393,20 +437,38 @@ namespace {
                             {winPos.x + sidebarWidth, winPos.y + menuSize.y},
                             ImGui::GetColorU32(ImVec4(0.085f, 0.085f, 0.09f, 1.0f)));
         ImGui::SetCursorPos(ImVec2(0, 8.0f));
+        const ImVec4 tabTextDim(0.62f, 0.62f, 0.66f, 1.0f);
+        const ImVec4 tabHover(0.14f, 0.14f, 0.15f, 1.0f);
         for (int i = 0; i < kTabCount; ++i) {
             const bool active = (i == page);
             const ImVec2 rowPos = ImGui::GetCursorScreenPos();
             const float rowH = 30.0f;
+            const float rowW = sidebarWidth - 4.0f; // отступ справа: строки
+            // не доходят до края окна/контента (починили «вылезание»).
             if (active)
                 draw->AddRectFilled(rowPos, {rowPos.x + 2.5f, rowPos.y + rowH},
                                     ImGui::GetColorU32(accent));
-            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
-            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.14f, 0.14f, 0.15f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, active ? accent : ImVec4(0.62f, 0.62f, 0.66f, 1.0f));
-            char label[64];
-            snprintf(label, sizeof(label), "%s  %s", tabs[i].icon, tabs[i].name);
-            if (ImGui::Selectable(label, active, 0, ImVec2(sidebarWidth, rowH))) page = i;
-            ImGui::PopStyleColor(3);
+            if (ImGui::IsMouseHoveringRect(rowPos, {rowPos.x + rowW, rowPos.y + rowH}) && !active)
+                draw->AddRectFilled(rowPos, {rowPos.x + rowW, rowPos.y + rowH},
+                                    ImGui::GetColorU32(tabHover));
+            ImGui::PushID(i);
+            const bool tabClicked = ImGui::InvisibleButton("##nw_tab", ImVec2(rowW, rowH));
+            ImGui::PopID();
+            if (tabClicked)
+                page = i;
+            // Иконка рисуется ШРИФТОМ Font Awesome. Раньше кодпоинт иконки
+            // (U+F0xx) уходил в текстовый шрифт (Segoe), у которого этих
+            // глифов нет — ImGui рисовал FallbackChar U+FFFD, то самый
+            // «ромб с вопросом».
+            const ImVec4 textColor = active ? accent : tabTextDim;
+            if (g_iconFont) {
+                ImGui::PushFont(g_iconFont);
+                ImGui::SetCursorScreenPos({rowPos.x + 12.0f, rowPos.y + (rowH - 16.0f) * 0.5f});
+                ImGui::TextColored(textColor, "%s", tabs[i].icon);
+                ImGui::PopFont();
+            }
+            ImGui::SetCursorScreenPos({rowPos.x + 40.0f, rowPos.y + (rowH - 15.0f) * 0.5f});
+            ImGui::TextColored(textColor, "%s", tabs[i].name);
         }
         ImGui::SetCursorPos(ImVec2(14.0f, menuSize.y - stripHeight - 26.0f));
         ImGui::TextDisabled("tg: @fkfwj");
@@ -470,6 +532,13 @@ namespace {
             if (ImGui::Checkbox("ESP health bar", &health)) g_features.espHealth.store(health);
             bool dist = g_features.espDistance.load();
             if (ImGui::Checkbox("ESP distance", &dist)) g_features.espDistance.store(dist);
+            // Дальность: был хардкод 3000 юнитов (~57 м) — на картах CS2
+            // враги чаще дальше, из-за чего ESP «то что-то рисует, то нет».
+            int espDistM = (int)(g_features.espMaxDistance.load() / 52.49f);
+            if (ImGui::SliderInt("ESP distance (m)", &espDistM, 25, 400))
+                g_features.espMaxDistance.store(espDistM * 52.49f);
+            bool tm = g_features.espTeammates.load();
+            if (ImGui::Checkbox("ESP teammates", &tm)) g_features.espTeammates.store(tm);
         } else if (page == 8) {
             // Indicators
             ImGui::TextColored(accent, "Indicators");
@@ -482,9 +551,12 @@ namespace {
             ImGui::TextColored(accent, "Misc");
             ImGui::Separator();
             bool aa = g_features.antiAimless.load();
-            if (ImGui::Checkbox("Antiaimless [F2]", &aa)) g_features.antiAimless.store(aa);
+            if (ImGui::Checkbox("Antiaimless [F2] (silent)", &aa)) g_features.antiAimless.store(aa);
+            ImGui::TextDisabled("Silent: камера не двигается, «в пол + спин» идёт в usercmd.");
+            // Скорость — ГРАДУСЫ В СЕКУНДУ (насколько быстро крутить),
+            // интегрируется по времени; не «шаг за итерацию цикла».
             float spin = g_features.spinSpeed.load();
-            if (ImGui::SliderFloat("Spin speed", &spin, 0.f, 10.f, "x%.0f")) g_features.spinSpeed.store(spin);
+            if (ImGui::SliderFloat("Spin speed (deg/s)", &spin, 10.f, 3600.f, "%.0f")) g_features.spinSpeed.store(spin);
             bool clanTag = g_features.clanTag.load();
             if (ImGui::Checkbox("ClanTag [NeverWin]", &clanTag)) g_features.clanTag.store(clanTag);
             bool rage = g_features.ragebot.load();

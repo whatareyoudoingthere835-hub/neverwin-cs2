@@ -82,6 +82,99 @@ namespace pbcmd {
         return true;
     }
 
+    // Пересчёт move_crc после изменения полей команды (viewangles и/или
+    // buttons). Без актуального CRC изменинная команда считается битой и
+    // эффект (silent aim) может просто не дойти. Сериализуем ТОЛЬКО buttons
+    // и viewangles — ровно так, как это делает V16 input.apply.
+    // Возврат: 0 = CRC записан, 1 = CRC пропущен (нет arena/нечего писать),
+    //          2 = структура команды недоступна.
+    inline int RecomputeMoveCrc(uintptr_t cmd, const usercmd_probe::Patterns& p) {
+        if (!cmd || !p.ReadyForApply())
+            return 2;
+        const uintptr_t baseRaw = *reinterpret_cast<const uintptr_t*>(cmd + 0x40);
+        if (!baseRaw)
+            return 2;
+        const uintptr_t base = baseRaw + kImplHeader;
+        if (!mem::IsValidPtr(reinterpret_cast<const void*>(base), 0x40))
+            return 2;
+
+        uint8_t buf[64]{};
+        uint8_t* out = buf;
+
+        // Кнопки читаем живьём из protobuf (impl): s1 +0x08, s2 +0x10, s3 +0x18.
+        const uintptr_t buttonsRaw = *reinterpret_cast<const uintptr_t*>(base + 0x28);
+        if (buttonsRaw) {
+            const uintptr_t buttons = buttonsRaw + kImplHeader;
+            if (mem::IsValidPtr(reinterpret_cast<const void*>(buttons), 0x20)) {
+                const uint64_t s1 = *reinterpret_cast<const uint64_t*>(buttons + 0x08);
+                const uint64_t s2 = *reinterpret_cast<const uint64_t*>(buttons + 0x10);
+                const uint64_t s3 = *reinterpret_cast<const uint64_t*>(buttons + 0x18);
+                uint8_t buttonSize = 0;
+                if (s1) buttonSize += 9;
+                if (s2) buttonSize += 9;
+                if (s3) buttonSize += 9;
+                if (buttonSize) {
+                    *out++ = 0x1A; *out++ = buttonSize;
+                    if (s1) { *out++ = 0x09; std::memcpy(out, &s1, 8); out += 8; }
+                    if (s2) { *out++ = 0x11; std::memcpy(out, &s2, 8); out += 8; }
+                    if (s3) { *out++ = 0x19; std::memcpy(out, &s3, 8); out += 8; }
+                }
+            }
+        }
+
+        // Углы (CMsgQAngle impl): x +0x08, y +0x0C, z +0x10.
+        const uintptr_t viewRaw = *reinterpret_cast<const uintptr_t*>(base + 0x30);
+        if (viewRaw) {
+            const uintptr_t view = viewRaw + kImplHeader;
+            float pitch = 0.0f, yaw = 0.0f, roll = 0.0f;
+            if (mem::IsValidPtr(reinterpret_cast<const void*>(view), 0x14)) {
+                pitch = *reinterpret_cast<const float*>(view + 0x08);
+                yaw   = *reinterpret_cast<const float*>(view + 0x0C);
+                roll  = *reinterpret_cast<const float*>(view + 0x10);
+            }
+            uint8_t angleSize = 0;
+            if (pitch != 0.0f) angleSize += 5;
+            if (yaw   != 0.0f) angleSize += 5;
+            if (roll  != 0.0f) angleSize += 5;
+            if (angleSize) {
+                *out++ = 0x22; *out++ = angleSize;
+                if (pitch != 0.0f) { *out++ = 0x0D; std::memcpy(out, &pitch, 4); out += 4; }
+                if (yaw   != 0.0f) { *out++ = 0x15; std::memcpy(out, &yaw,   4); out += 4; }
+                if (roll  != 0.0f) { *out++ = 0x1D; std::memcpy(out, &roll,  4); out += 4; }
+            }
+        }
+
+        if (out == buf)
+            return 1; // сериализовать нечего — CRC не трогали
+
+        *reinterpret_cast<uint32_t*>(base) |= kBaseMoveCrc;
+
+        // Arena: битовая маска baseRaw+0x8 (V16), затем cmd+0x18 (proto_arena),
+        // затем кандидат cmd+0x58 (из diag).
+        uintptr_t arena = 0;
+        const uintptr_t arenaBits = *reinterpret_cast<const uintptr_t*>(baseRaw + 0x8);
+        if (arenaBits) {
+            arena = arenaBits & ~uintptr_t(0x3);
+            if (arenaBits & 1u)
+                arena = *reinterpret_cast<const uintptr_t*>(arena);
+        }
+        if (!arena)
+            arena = *reinterpret_cast<const uintptr_t*>(cmd + 0x18);
+        if (!arena)
+            arena = *reinterpret_cast<const uintptr_t*>(cmd + 0x58);
+        if (!arena || !mem::IsValidPtr(reinterpret_cast<const void*>(arena), 0x10))
+            return 1; // CRC пропущен (не фатально: углы уже записаны)
+
+        uint8_t message[0x18]{};
+        using StringCopyFn = void(__fastcall*)(uintptr_t, uintptr_t, int);
+        using SerializeFn = void(__fastcall*)(void*, uintptr_t, uintptr_t);
+        reinterpret_cast<StringCopyFn>(p.stringCopy)(reinterpret_cast<uintptr_t>(message),
+            reinterpret_cast<uintptr_t>(buf), static_cast<int>(out - buf));
+        reinterpret_cast<SerializeFn>(p.serializeMoveCrc)(reinterpret_cast<void*>(base + 0x20),
+            reinterpret_cast<uintptr_t>(message), arena);
+        return 0;
+    }
+
     // Чтение текущих protobuf-углов команды (для probe/диагностики).
     inline bool ReadViewAngles(uintptr_t cmd, float& pitch, float& yaw) {
         UserCmdView v = Open(cmd);

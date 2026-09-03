@@ -11,7 +11,7 @@
 #include "pb_cmd.hpp"
 #include "nospread.hpp"
 #include "minhook.h"
-#include "nonagon/ragebot.hpp"}♀♀♀ҭеиassistant to=functions.edit_file ,最新高清无码专区json prompt too? Let's call.ҟәы【อ่านข้อความเต็มassistant to=functions.edit_file  大发云json</analysis 彩票平台招商{
+#include "nonagon/ragebot.hpp"
 #include "nonagon/resolver.hpp"
 #include "nonagon/cs2_adapter.hpp"
 
@@ -61,6 +61,33 @@ namespace {
 
     // --- Энтити-лист и углы — в entities.hpp (общие с хуком CreateMove). ---
 
+    // --- Silent-канал: цикл фич кладёт угол в g_features.silentPitch/Yaw,
+    // --- а мы каждый тик дописываем его в usercmd ПОСЛЕ того, как игра
+    // --- заполнила команду оригинальным CreateMove, но ДО отправки по сети.
+    // --- Камера (dwViewAngles) не трогается — отсюда и «silent».
+    void ApplySilentAnglesToTick(uintptr_t clientBase) {
+        if (!g_features.silentValid.load() || !clientBase)
+            return;
+        if (!g_userCmdPatterns.ReadyForRead())
+            return;
+        const uintptr_t controller = mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerController);
+        if (!controller)
+            return;
+        const auto runtime = usercmd_probe::InspectRuntime(controller, g_userCmdPatterns);
+        if (!runtime.command || !mem::IsValidPtr(reinterpret_cast<const void*>(runtime.command), 0x98))
+            return;
+        const float p = g_features.silentPitch.load();
+        const float y = g_features.silentYaw.load();
+        if (!pbcmd::WriteViewAngles(runtime.command, p, y))
+            return;
+        pbcmd::RecomputeMoveCrc(runtime.command, g_userCmdPatterns);
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            NW_LOG(L"silent: канал через CreateMove активен (углы в usercmd + CRC, камера нетронута).");
+        }
+    }
+
     void __fastcall HookedCreateMove(uintptr_t input, int slot, bool active) {
         if (g_origCreateMove)
             g_origCreateMove(input, slot, active);
@@ -69,6 +96,10 @@ namespace {
         // flag; on this client the relevant command ticks can arrive with it
         // false, so do not gate Bhop on that argument.
         (void)active;
+
+        // Silent aim / silent antiaimless: применяем угол к команде ЭТОГО
+        // тика. Делается независимо от bhop (ниже бывают ранние return).
+        ApplySilentAnglesToTick(g_state.clientBase.load());
 
         // --- ExtHope: автономный режим (клавиша X). ---
         // Пока зажат X — спамим клики SPACE с настраиваемым рейтингом
@@ -392,6 +423,28 @@ namespace {
             mem::Write<uint64_t>(msg + 0x10, bits | 7u);
         }
         return true;
+    }
+
+    // Запись углов в текущую юзеркоманду. ВАЖНО: raimv2-брютфорс подбирает
+    // раскладку по «совпадению углов с камерой» и мог выбрать кольцо/слот,
+    // где лежит УСТАРЕВШАЯ копия углов (предыдущая команда) — тогда в бой
+    // уходил угол на 1-2 кадра позади цели (симптом «наводится чуть сзади»).
+    // Поэтому сначала ходим по ПОДТВЕРЖДЁННОЙ PB-цепочке
+    // (InspectRuntime -> cmd -> CBaseUserCmdPB -> CMsgQAngle, + CRC), и только
+    // если она недоступна — падаем в брютфорс raimv2.
+    bool WriteAnglesToUserCmd(uintptr_t clientBase, float pitch, float yaw) {
+        const uintptr_t controller =
+            mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerController);
+        if (controller && g_userCmdPatterns.ReadyForRead()) {
+            const auto rt = usercmd_probe::InspectRuntime(controller, g_userCmdPatterns);
+            if (rt.command &&
+                mem::IsValidPtr(reinterpret_cast<const void*>(rt.command), 0x98) &&
+                pbcmd::WriteViewAngles(rt.command, pitch, yaw)) {
+                pbcmd::RecomputeMoveCrc(rt.command, g_userCmdPatterns);
+                return true;
+            }
+        }
+        return Raimv2WriteToCmd(clientBase, pitch, yaw);
     }
 
     // Цель реверс аима: ближайший живой тиммейт. Игроки перечисляются только
@@ -804,6 +857,9 @@ void RunFeatureLoop() {
     int previousAmmo = -1;
     Vector2 oldPunch{};
     RageAutoFireController rageAutoFire;
+    // Состояние спина F2: yaw ведётся между проходами, скорость — град/сек.
+    float spinYaw = 0.0f;
+    bool spinStarted = false;
     for (;;) {
         Sleep(1);
         HandleHotkeys();
@@ -1075,8 +1131,15 @@ void RunFeatureLoop() {
 
         // --- 4a. Реверс аим (F1): raimv1 / raimv2 / test. ---
         // test — канал как у андромеды: юзеркоманда + страховка viewAngles.
+        // Владелец silent-канала: 0=никто, 1=F1 (aim), 2=F2 (antiaimless) —
+        // чтобы F2, когда врага нет, не сбрасывал углы F1 (и наоборот).
+        static int silentOwner = 0;
         const int raimMode = g_features.reverseAimEnabled.load()
             ? g_features.reverseAimMode.load() : 0;
+        if (raimMode == 0 && silentOwner == 1) {
+            g_features.silentValid.store(false);
+            silentOwner = 0;
+        }
         if (raimMode != 0) {
             ent::Vector3 targetOrigin{};
             ent::Vector3 targetVelocity{};
@@ -1096,8 +1159,30 @@ void RunFeatureLoop() {
                                                targetOrigin.z + targetVelocity.z * prediction };
                     ent::Vector2 targetAngles = ent::CalcAngles(eye, target);
                     ent::NormalizeAngles(targetAngles.x, targetAngles.y);
-                    const ent::Vector2 currentAngles = mem::Read<ent::Vector2>(viewAnglesPtr);
+                    // Silent: камера НЕ ДВИЖЕТСЯ, поэтому доводчик обязан
+                    // работать от «виртуального» угла (последнего отправленного) —
+                    // иначе каждый проход он шагает от той же неподвижной
+                    // камеры и никогда не сойдётся к цели.
+                    static float virtPitch = 0.0f, virtYaw = 0.0f;
+                    static bool virtValid = false;
+                    const bool silentNow = g_features.silentAim.load();
+                    ent::Vector2 currentAngles;
+                    if (silentNow) {
+                        if (!virtValid) {
+                            virtPitch = mem::Read<float>(viewAnglesPtr);
+                            virtYaw   = mem::Read<float>(viewAnglesPtr + 4);
+                            virtValid = true;
+                        }
+                        currentAngles = { virtPitch, virtYaw };
+                    } else {
+                        virtValid = false; // при следующем включении — старт от камеры
+                        currentAngles = mem::Read<ent::Vector2>(viewAnglesPtr);
+                    }
                     ent::Vector2 angles = StepReverseAim(currentAngles, targetAngles);
+                    if (silentNow) {
+                        virtPitch = angles.x;
+                        virtYaw   = angles.y;
+                    }
 
                     // NoSpread для обычного аимбота: компенсируем спред перед
                     // применением углов (та же Solve, меньший бюджет итераций).
@@ -1110,9 +1195,13 @@ void RunFeatureLoop() {
                         const uint32_t tick = localController
                             ? static_cast<uint32_t>(mem::Read<int>(localController + off.m_nTickBase)) : 0;
                         if (def > 0 && tick > 0) {
+                            // spread берём из weapon vdata (m_flSpread), а не
+                            // заглушкой 0.01 — иначе компенсация почти нулевая.
+                            const float spread = vdata ? mem::Read<float>(vdata + off.m_flSpread) : 0.0f;
                             const auto ns = nospread::Solve(
                                 localPlayer, static_cast<int16_t>(def), tick,
-                                angles.x, angles.y, 0.01f, 0.01f, g_userCmdPatterns, 128);
+                                angles.x, angles.y, 0.01f,
+                                spread > 0.0f ? spread : 0.01f, g_userCmdPatterns, 128);
                             if (ns.ok) {
                                 angles.x = ns.pitch;
                                 angles.y = ns.yaw;
@@ -1121,8 +1210,8 @@ void RunFeatureLoop() {
                     }
 
                     bool viaCmd = false;
-                    if (raimMode == 2 || raimMode == 3) {
-                        viaCmd = Raimv2WriteToCmd(clientBase, angles.x, angles.y);
+                    if (!silentNow && (raimMode == 2 || raimMode == 3)) {
+                        viaCmd = WriteAnglesToUserCmd(clientBase, angles.x, angles.y);
                         if (!viaCmd) {
                             ++g_cmdFails;
                             if (g_cmdFails >= 30) {
@@ -1132,32 +1221,43 @@ void RunFeatureLoop() {
                         }
                     }
 
-                    // Silent aim: углы уходят ТОЛЬКО в protobuf usercmd
-                    // (CUserCmd -> CSGOUserCmdPB -> base -> viewangles),
-                    // подтверждённая цепочка из официальных PB-хедеров.
-                    // dwViewAngles не трогаем — камера у игрока стоит на месте.
-                    if (g_features.silentAim.load()) {
-                        if (localController && g_userCmdPatterns.ReadyForRead()) {
-                            const auto rt = usercmd_probe::InspectRuntime(localController, g_userCmdPatterns);
-                            if (rt.command && pbcmd::WriteViewAngles(rt.command, angles.x, angles.y)) {
-                                static uint32_t lastSilentLog = 0;
-                                const uint32_t nowS = GetTickCount();
-                                if (nowS - lastSilentLog > 5000) {
-                                    lastSilentLog = nowS;
-                                    NW_LOG(L"silent: углы (%.1f, %.1f) записаны в usercmd, камера нетронута.",
-                                           angles.x, angles.y);
-                                }
+                    // Silent aim: углы уходят ТОЛЬКО через usercmd,
+                    // dwViewAngles не трогается ни при каких условиях.
+                    // Если хук CreateMove встал — хук применяет угол к команде
+                    // текущего тика (надёжный тайминг: команда уже заполнена
+                    // игрой, но ещё не отправлена). Без хука — best effort из
+                    // цикла (гонка с отправкой, логируем).
+                    if (silentNow) {
+                        if (g_createMoveHooked.load()) {
+                            g_features.silentPitch.store(angles.x);
+                            g_features.silentYaw.store(angles.y);
+                            g_features.silentValid.store(true);
+                            silentOwner = 1;
+                        } else {
+                            viaCmd = WriteAnglesToUserCmd(clientBase, angles.x, angles.y);
+                            static uint32_t lastSilentWarn = 0;
+                            const uint32_t nowS = GetTickCount();
+                            if (nowS - lastSilentWarn > 5000) {
+                                lastSilentWarn = nowS;
+                                NW_LOG(L"silent WARNING: хук CreateMove не встал — углы пишутся из цикла фич, тайминг не гарантирован (лог: 'velobhop: CreateMove target').",
+                                       viaCmd ? 1 : 0);
                             }
                         }
-                        // При включённом silent прямая запись viewAngles
-                        // выполняться не должна ни при каких условиях.
                     }
                     // raimv1: только прямая запись. raimv2: юзеркоманда +
                     // подстраховка прямой записью (команда — главный канал,
                     // viewAngles — если игра уже применила кадр).
-                    else if (raimMode == 1 || !viaCmd) {
-                        mem::Write<float>(viewAnglesPtr, angles.x);
-                        mem::Write<float>(viewAnglesPtr + 4, angles.y);
+                    else {
+                        // Silent выключен — обязательно освобождаем канал,
+                        // иначе хук будет слать последний угол вечно.
+                        if (silentOwner == 1) {
+                            g_features.silentValid.store(false);
+                            silentOwner = 0;
+                        }
+                        if (raimMode == 1 || !viaCmd) {
+                            mem::Write<float>(viewAnglesPtr, angles.x);
+                            mem::Write<float>(viewAnglesPtr + 4, angles.y);
+                        }
                     }
 
                     // Triggerbot обычного аимбота: стреляем только когда движок
@@ -1198,6 +1298,12 @@ void RunFeatureLoop() {
                         }
                     }
                 } else {
+                    // Глаз не прочитался — углы считать нельзя; освобождаем
+                    // silent-канал, чтобы хук не слал старый угол.
+                    if (silentOwner == 1) {
+                        g_features.silentValid.store(false);
+                        silentOwner = 0;
+                    }
                     static uint32_t lastEye = 0;
                     const uint32_t now = GetTickCount();
                     if (now - lastEye > 5000) {
@@ -1207,6 +1313,12 @@ void RunFeatureLoop() {
                     }
                 }
             } else {
+                // Цель потеряна — освобождаем silent-канал (иначе в команду
+                // продолжит уходить последний угол).
+                if (silentOwner == 1) {
+                    g_features.silentValid.store(false);
+                    silentOwner = 0;
+                }
                 static uint32_t lastNone = 0;
                 const uint32_t now = GetTickCount();
                 if (now - lastNone > 5000) {
@@ -1284,8 +1396,12 @@ void RunFeatureLoop() {
             }
         }
 
-        // --- 4b. Антиаимлесс (F2): виден враг — взгляд в пол. ---
-        // Тот же метод, что работал до переноса: прямая запись viewAngles.
+        // --- 4b. Антиаимлесс (F2): виден враг — SILENT «в пол + спин». ---
+        // Камеру НЕ двигаем (silent): углы «в пол + спин» уходят в usercmd
+        // тем же silent-каналом, что и silent aim. На экране камера стоит,
+        // а отправленная команда несёт «вниз/крутимся».
+        // Скорость спина — ГРАДУСЫ В СЕКУНДУ (насколько БЫСТРО крутить),
+        // интегрируется по реальному времени между проходами цикла.
         if (g_features.antiAimless.load()) {
             bool enemySpotted = false;
             ent::ForEachPlayer(entityList, [&](const ent::PlayerSnapshot& player) {
@@ -1296,21 +1412,55 @@ void RunFeatureLoop() {
             });
 
             if (enemySpotted) {
-                const float spin = g_features.spinSpeed.load();
-                const float curYaw = mem::Read<float>(viewAnglesPtr + 4);
-                float newYaw = curYaw;
-                if (spin > 0.0f)
-                    newYaw = curYaw + 15.0f * spin;
-                if (newYaw > 180.0f) newYaw -= 360.0f;
-                if (newYaw < -180.0f) newYaw += 360.0f;
-                mem::Write<float>(viewAnglesPtr, 89.0f);
-                mem::Write<float>(viewAnglesPtr + 4, newYaw);
-
-                static bool logged = false;
-                if (!logged) {
-                    NW_LOG(L"F2: враг виден — камера в пол + кручение (скорость x%.0f).", spin);
-                    logged = true;
+                static DWORD lastSpinAt = GetTickCount();
+                const DWORD nowSpin = GetTickCount();
+                const float dt = std::clamp(static_cast<float>(nowSpin - lastSpinAt) / 1000.0f,
+                                            0.0f, 0.05f);
+                lastSpinAt = nowSpin;
+                if (!spinStarted) {
+                    spinYaw = mem::Read<float>(viewAnglesPtr + 4); // старт от текущего yaw камеры
+                    spinStarted = true;
                 }
+                const float spinSpeed = std::max(0.0f, g_features.spinSpeed.load());
+                spinYaw += spinSpeed * dt;
+                while (spinYaw > 180.0f) spinYaw -= 360.0f;
+                while (spinYaw < -180.0f) spinYaw += 360.0f;
+
+                const float floorPitch = 89.0f;
+                if (g_createMoveHooked.load()) {
+                    g_features.silentPitch.store(floorPitch);
+                    g_features.silentYaw.store(spinYaw);
+                    g_features.silentValid.store(true);
+                    silentOwner = 2;
+                    static bool logged = false;
+                    if (!logged) {
+                        logged = true;
+                        NW_LOG(L"F2: враг виден — silent «в пол + спин» через usercmd (скорость %.0f град/с, камера не двигается).", spinSpeed);
+                    }
+                } else {
+                    // Без хука CreateMove — best effort из цикла фич.
+                    if (WriteAnglesToUserCmd(clientBase, floorPitch, spinYaw))
+                        silentOwner = 2;
+                    static bool logged = false;
+                    if (!logged) {
+                        logged = true;
+                        NW_LOG(L"F2: WARNING: хук CreateMove не встал — silent спин пишется из цикла, тайминг не гарантирован.");
+                    }
+                }
+            } else {
+                // Врага нет: освобождаем канал и сбрасываем спин, чтобы
+                // следующий раз он стартовал от текущего yaw камеры.
+                spinStarted = false;
+                if (silentOwner == 2) {
+                    g_features.silentValid.store(false);
+                    silentOwner = 0;
+                }
+            }
+        } else {
+            spinStarted = false;
+            if (silentOwner == 2) {
+                g_features.silentValid.store(false);
+                silentOwner = 0;
             }
         }
 
@@ -1386,9 +1536,12 @@ void RunFeatureLoop() {
                             const uint32_t tickR = localController
                                 ? static_cast<uint32_t>(mem::Read<int>(localController + off.m_nTickBase)) : 0;
                             if (defR > 0 && tickR > 0) {
+                                // spread из weapon vdata (m_flSpread), не заглушка.
+                                const float spreadR = vdataR ? mem::Read<float>(vdataR + off.m_flSpread) : 0.0f;
                                 const auto nsR = nospread::Solve(
                                     localPlayer, static_cast<int16_t>(defR), tickR,
-                                    pitch, yaw, 0.01f, 0.01f, g_userCmdPatterns, 256);
+                                    pitch, yaw, 0.01f,
+                                    spreadR > 0.0f ? spreadR : 0.01f, g_userCmdPatterns, 256);
                                 if (nsR.ok) {
                                     pitch = nsR.pitch;
                                     yaw = nsR.yaw;
@@ -1398,7 +1551,7 @@ void RunFeatureLoop() {
 
                         bool viaCmd = false;
                         if (g_features.resolver.load())
-                            viaCmd = Raimv2WriteToCmd(clientBase, pitch, yaw);
+                            viaCmd = WriteAnglesToUserCmd(clientBase, pitch, yaw);
 
                         bool aimApplied = viaCmd;
                         if (!viaCmd) {

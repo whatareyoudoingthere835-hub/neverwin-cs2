@@ -20,9 +20,20 @@ struct Features {
     std::atomic<bool> reverseAimTrigger{false}; // триггербот в обычном аимботе
     std::atomic<bool> silentAim{false};         // углы только в usercmd, камеру не трогаем
     std::atomic<bool> noSpread{false};          // компенсация спреда (aim + rage)
-    std::atomic<float> reverseAimPrediction{0.12f}; // секунд вперёд по velocity цели
-    std::atomic<bool> antiAimless{false};  // F2 — взгляд в пол при видимом враге
-    std::atomic<float> spinSpeed{1.0f};    // скорость спинбота F2: 0..10 (множитель)
+    std::atomic<float> reverseAimPrediction{0.15f}; // секунд вперёд по velocity цели
+    std::atomic<bool> antiAimless{false};  // F2 — silent «в пол + спин» при видимом враге
+    // Скорость спина F2 — ГРАДУСЫ В СЕКУНДУ (насколько быстро крутить),
+    // а не «на сколько градусов за шаг». Время берётся из реальных миллисекунд.
+    std::atomic<float> spinSpeed{720.0f};  // 10..3600 deg/s
+    // --- Silent-канал (общий для aim и antiaimless) ---
+    // Цикл фич вычисляет угол и кладёт его сюда; хук CreateMove каждый тик
+    // дописывает его в usercmd ПОСЛЕ того, как игра заполнила команду, но
+    // до отправки по сети. Это и есть silent: камера (dwViewAngles) стоит,
+    // а отправленная команда несёт целевой угол. Писать в usercmd из цикла
+    // фич бесполезно — следующий CreateMove затирает углы свежей камерой.
+    std::atomic<float> silentPitch{0.0f};
+    std::atomic<float> silentYaw{0.0f};
+    std::atomic<bool>  silentValid{false}; // есть ли свежий угол на этот тик
     std::atomic<bool> visualRecoil{false}; // F3 — отдача x4
     std::atomic<bool> bhop{false};         // F4 — обычный auto-bhop при удержании SPACE
     std::atomic<bool> extHope{false};      // ExtHope — спам кликов SPACE пока зажат X
@@ -32,6 +43,10 @@ struct Features {
     std::atomic<bool> espEnabled{false};   // box ESP через view matrix
     std::atomic<bool> espHealth{true};     // полоска HP рядом с боксом
     std::atomic<bool> espDistance{true};   // дистанция в метрах под боксом
+    // Дальность ESP в юнитах (1 м = 52.49). Бывший хардкод 3000 (~57 м)
+    // — половина карты; теперь слайдер 25..400 м.
+    std::atomic<float> espMaxDistance{10000.0f};
+    std::atomic<bool> espTeammates{false}; // рисовать и своих (по умолчанию враги)
     // Nonagon ragebot (F6)
     std::atomic<bool> ragebot{false};      // F6 — рейджбот с резолвером из nonagon
     std::atomic<bool> rageAutoFire{true};  // автоогонь/триггер после подтверждения живой цели

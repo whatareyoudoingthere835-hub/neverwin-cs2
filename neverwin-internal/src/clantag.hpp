@@ -21,6 +21,21 @@ namespace clantag {
             const char* stringValue;
         };
 
+        // UTF-8 -> UTF-16 (для логов: ник с кириллицей/эмодзи в wchar-лог
+        // идёт только через правильное преобразование).
+        inline std::wstring ToWide(const std::string& s) {
+            if (s.empty())
+                return {};
+            const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(),
+                                              static_cast<int>(s.size()), nullptr, 0);
+            if (n <= 0)
+                return {};
+            std::wstring w(static_cast<size_t>(n), L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, s.data(),
+                                static_cast<int>(s.size()), w.data(), n);
+            return w;
+        }
+
         inline void* Interface(const wchar_t* module, const char* version) {
             const HMODULE mod = GetModuleHandleW(module);
             if (!mod) return nullptr;
@@ -71,8 +86,20 @@ namespace clantag {
                     LogOnce(2, L"clantag: base nickname is empty.");
                     return;
                 }
+                // CS2 отклоняет имя длиннее 32 СИМВОЛОВ. Если базовый ник
+                // длинный, "[NeverWin] " (11) его не пропустит — берём
+                // короткий тег "[NW] " (5). До этого именно поэтому
+                // «clantag не работает» у людей с длинным ником.
+                m_tag = (m_baseName.size() <= 32 - 11) ? kTagFull : kTagShort;
+                m_tagLength = std::strlen(m_tag.c_str());
                 m_lastTick = GetTickCount();
-                LogOnce(3, L"clantag: captured base nickname '%S'.", m_baseName.c_str());
+                // ВАЖНО: м_baseName — UTF-8 (char*). Раньше сюда уходило %S
+                // (wide-формат) с char* аргументом: байты UTF-8 (в т.ч. 4
+                // байта эмодзи) переинтерпретировались как UTF-16 — отсюда
+                // «ромб с вопросом» в логе/DebugView. Теперь переводим.
+                LogOnce(3, L"clantag: captured base nickname '%s' (tag '%s').",
+                        detail::ToWide(m_baseName).c_str(),
+                        detail::ToWide(m_tag).c_str());
             }
 
             const DWORD now = GetTickCount();
@@ -82,9 +109,9 @@ namespace clantag {
             if (!m_full && now - m_lastTick < kFrameMs) return;
             m_lastTick = now;
 
-            if (m_full) { m_full = false; m_index = kTagLength - 1; }
+            if (m_full) { m_full = false; m_index = m_tagLength - 1; }
             else if (m_growing) {
-                if (++m_index >= kTagLength) { m_index = kTagLength; m_full = true; m_growing = false; }
+                if (++m_index >= m_tagLength) { m_index = m_tagLength; m_full = true; m_growing = false; }
             } else if (m_index == 0) {
                 m_growing = true;
             } else {
@@ -100,19 +127,33 @@ namespace clantag {
         }
 
     private:
-        static constexpr const char* kTag = "[NeverWin]";
-        static constexpr size_t kTagLength = 10;
+        static constexpr const char* kTagFull  = "[NeverWin]";
+        static constexpr const char* kTagShort = "[NW]";
         static std::string StripTag(const std::string& name) {
-            if (name.rfind(kTag, 0) == 0) {
-                size_t p = std::strlen(kTag);
-                while (p < name.size() && name[p] == ' ') ++p;
-                return name.substr(p);
+            const char* tags[2] = { kTagFull, kTagShort };
+            for (const char* tag : tags) {
+                if (name.rfind(tag, 0) == 0) {
+                    size_t p = std::strlen(tag);
+                    while (p < name.size() && name[p] == ' ') ++p;
+                    return name.substr(p);
+                }
             }
             return name;
         }
         void Apply() {
-            const std::string tag(kTag, m_index);
-            const std::string display = tag.empty() ? m_baseName : tag + " " + m_baseName;
+            const std::string tag(m_tag, m_index);
+            std::string display;
+            if (tag.empty())
+                display = m_baseName;
+            else
+                display = tag + " " + m_baseName;
+            // Страховка по лимиту 32 символа (режем по границе UTF-8).
+            if (display.size() > 32) {
+                size_t cut = 32;
+                while (cut > 0 && (static_cast<unsigned char>(display[cut] & 0xC0) == 0x80))
+                    --cut;
+                display.resize(cut);
+            }
             if (display == m_lastApplied) return;
             if (detail::Execute("setinfo name \"" + display + "\"")) {
                 m_lastApplied = display;
@@ -131,7 +172,8 @@ namespace clantag {
             NW_LOG(L"%s", text);
         }
 
-        std::string m_baseName, m_lastApplied;
+        std::string m_baseName, m_lastApplied, m_tag;
+        size_t m_tagLength = 0;
         DWORD m_lastTick = 0;
         size_t m_index = 0;
         bool m_captured = false, m_growing = true, m_full = false;

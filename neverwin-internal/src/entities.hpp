@@ -406,10 +406,14 @@ namespace ent {
         if (sceneNode)
             origin = mem::Read<Vector3>(sceneNode + offsets::g.m_vecAbsOrigin);
 
+        // У живой модели глаза смещены ТОЛЬКО по Z (x/y ~ 0, z 45..68),
+        // поэтому окна жёсткие: даже небольшой мусор (±10..50 юнитов) сдвигает
+        // все углы аима на «несколько градусов» — симптом «наводится чуть мимо».
+        // Старая отсечка ±100 такой мусор пропускала.
         Vector3 viewOffset = mem::Read<Vector3>(pawn + offsets::g.m_vecViewOffset);
-        if (!std::isfinite(viewOffset.x) || viewOffset.x < -100.0f || viewOffset.x > 100.0f) viewOffset.x = 0.0f;
-        if (!std::isfinite(viewOffset.y) || viewOffset.y < -100.0f || viewOffset.y > 100.0f) viewOffset.y = 0.0f;
-        if (!std::isfinite(viewOffset.z) || viewOffset.z < -200.0f || viewOffset.z > 300.0f) viewOffset.z = 64.0f;
+        if (!std::isfinite(viewOffset.x) || std::fabs(viewOffset.x) > 5.0f) viewOffset.x = 0.0f;
+        if (!std::isfinite(viewOffset.y) || std::fabs(viewOffset.y) > 5.0f) viewOffset.y = 0.0f;
+        if (!std::isfinite(viewOffset.z) || viewOffset.z < -20.0f || viewOffset.z > 80.0f) viewOffset.z = 64.0f;
 
         return origin + viewOffset;
     }

@@ -2,6 +2,9 @@
 
 > Документ: полная выжимка всего найденного/починенного за всю работу над читом.
 > Дата актуализации: 2026-09-03. Последняя сборка: **v78** (build CS2 14178).
+> **v79 (источник, 2026-09-03):** silent aim через CreateMove + CRC, antiaimless
+> silent + spin в град/с, nospread-паттерны 14178, иконки вкладки через FA-шрифт,
+> ESP-диагностика + дальность/тиммейты, clantag 32-символьный лимит. См. §18.
 > Цель: любой новый агент/сессия продолжает работу с этого файла без повторного реверса.
 
 ---
@@ -136,7 +139,7 @@ GetUserCmd(controller, sequence)                  // = GetUserCmdBase - 0x90 (п
 - utl_vector_push: `>E8 ? ? ? ?< 4C 8B D0 45 8B 4A 10`
 - string_copy: `>E8 ? ? ? ?< 0F 10 45 88`
 - serialize_move_crc: `48 89 5C 24 ? 55 56 57 48 83 EC 30 49 8B C0 48 8B FA 48 8B F1 48 8B 09 F6 C1 03`
-- NoSpread (из UGame-исходника): computeRandomSeed `48 89 5C 24 ? 57 48 81 EC ? ? ? ? 48 8B F9 41 8B ?`, calculateSpread `48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 4C 63 EA` — статус на 14178 неизвестен, в логе есть строка `nospread probe: seed=... spread=...`.
+- NoSpread (14178, из patterns.json): computeRandomSeed (rva 0xCB9A30) `48 89 5C 24 ? 57 48 81 EC ? ? ? ? F3 0F 10 0A 48 8D 8C 24 ? ? ? ? 41 8B D8 48 8B FA E8` (свежий пролог; fallback — старый UGame `...48 8B F9 41 8B ?`). calculateSpread (rva 0xCBA350) `48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 4C 63 EA`, маска 34 знака `xxxxxx?xxx?xxx?xxxxxxxxxxxx???xxx`. Подпись ComputeRandomSeed: `(pawn, angles*, tick)` → seed (rax). Строка лога: `nospread probe: seed=... spread=... (nospread ready)`.
 - V16-фикс добавлял: button_state_alloc (не портирован), csgo_input pattern `84C0740C488D0D*...` (не нужен — есть dwCSGOInput).
 
 Сканер умеет: byte+mask по образу модуля, resolve RIP-relative call (`>` в velocity-нотации = target E8).
@@ -184,23 +187,45 @@ IN_JUMP снимается в +0x60, transition в +0x68, ApplyButtons (protobuf
 
 ---
 
-## 9. Silent aim — почти готов
+## 9. Silent aim — канал через CreateMove (v79)
 
-`g_features.silentAim` + чекбокс в меню. Пишет углы через pbcmd::WriteViewAngles (§7), прямую запись viewAngles блокирует. В бой не проверен. Если пули летят мимо при живом логе `silent: углы записаны...` — сервер берёт углы ещё откуда-то (input_history / перетирание до отправки) — копать в эту сторону.
+`g_features.silentAim` + чекбокс в меню. **Принципиальный фикс v79:** писать углы
+из цикла фич (Sleep(1)) бессмысленно — следующий CreateMove затирает команду
+свежей камерой ДО отправки. Теперь:
+
+- Цикл фич считает угол (в silent-режиме — от «виртуального» угла, т.к. камера
+  стоит, иначе доводчик не сходится) и кладёт в `g_features.silentPitch/Yaw/Valid`.
+- **Хук CreateMove** (slot 5, §5) после оригинального вызова дописывает угол в
+  usercmd текущего тика: `pbcmd::WriteViewAngles` + `pbcmd::RecomputeMoveCrc`
+  (новое: пересчёт move_crc по живым buttons+viewangles, иначе команда «битая»).
+- Без хука CreateMove — best effort из цикла (в логе `silent WARNING: хук CreateMove не встал`).
+- Камера (dwViewAngles) не трогается ни при каких условиях.
+- Канал общий с F2 (antiaimless): `silentOwner` 1=F1/2=F2, чтобы не сбивали друг друга.
+
+В бой НЕ проверен. Если пули мимо при логe `silent: канал через CreateMove активен`
+— копать input_history (CSGOInputHistoryEntryPB) / проверку CRC сервером.
 
 ---
 
 ## 10. NoSpread (nospread.hpp)
 
-UGame-схема: перебор pitch 0.125°×768 → seed = ComputeRandomSeed(pawn,angles,tick) → spread = CalculateSpread(itemDef,1,0,seed+1,inacc,spread) → компенсация pitch+=deg(|spread|), yaw-=deg(atan2(sx,sy)) → верификация seed и spread-дельты <0.0005. itemDefIndex читается из vdata+0x1BA (uint16). Подключён к aim (128 итераций) и ragebot (256). Паттерны на 14178 не подтверждены — гейт `ReadyForNoSpread`, при unavailable просто no-op. inaccuracy/spread пока заглушка 0.01/0.01 — надо брать реальные из weapon vdata (m_flSpread=0x758 и т.п. есть в offsets.hpp).
+UGame-схема: перебор pitch 0.125°×768 → seed = ComputeRandomSeed(pawn,angles,tick) → spread = CalculateSpread(itemDef,1,0,seed+1,inacc,spread) → компенсация pitch+=deg(|spread|), yaw-=deg(atan2(sx,sy)) → верификация seed и spread-дельты <0.0005. itemDefIndex читается из vdata+0x1BA (uint16). Подключён к aim (128 итераций) и ragebot (256).
+
+**Почему «не работал» (разбор v79):**
+1. Паттерн ComputeRandomSeed в коде был со СТАРОГО билда (`...48 8B F9 41 8B ?`) — пролог на 14178 другой (см. §6, паттерн 14178 из patterns.json: rva 0xCB9A30, `48 89 5C 24 08 57 48 81 EC F0 00 00 00 F3 0F 10 0A 48 8D 8C 24 10 01 00 00 41 8B D8 48 8B FA E8`). Найдено = 0 → no-op. Теперь сначала свежий пролог, fallback — старый.
+2. Маска CalculateSpread была сдвинута (39 знаков на 34 байта, лишний пробел) — матчу Никогда не давала. Теперь `xxxxxx?xxx?xxx?xxxxxxxxxxxx???xxx` (34).
+3. inaccuracy/spread были заглушкой 0.01/0.01 → компенсация почти нулевая. Теперь spread берётся из weapon vdata `m_flSpread` (0x758); inaccuracy пока 0.01 (динамический спред не читаем).
+
+Лог-маркер: `nospread probe: seed=0x... spread=0x... (nospread ready)`.
 
 ---
 
 ## 11. ESP (gui.cpp DrawEsp)
 
-20 Гц скан (chrono::steady_clock, 50мс) с кешем; только при entityLayoutVerified; враги (team!=local), IsAlive, дистанция ≤3000 юнитов; сортировка дальние-снизу-слоём; W2S по dwViewMatrix (w<0.65 отсечка); бокс 0.38×height, цвет=HP(красный→зелёный), тень, HP-бар слева, дистанция «Nм» (юниты/52.49) с тумблером. Рисуется в Present через GetBackgroundDrawList.
+20 Гц скан (chrono::steady_clock, 50мс) с кешем; только при entityLayoutVerified; враги (team!=local) или тиммейты (чекбокс «ESP teammates», v79), IsAlive; **дальность — слайдер 25..400 м (по умолчанию 190 м; был хардкод 3000 юнитов ≈ 57 м — из-за него ESP «то рисует, то нет»)**; сортировка дальние-снизу-слоём; W2S по dwViewMatrix (w<0.65 отсечка); бокс 0.38×height, цвет=HP(красный→зелёный), тень, HP-бар слева, дистанция «Nм» (юниты/52.49) с тумблером. Рисуется в Present через GetBackgroundDrawList.
 История: был скан каждый кадр → сильные лаги; 10Гц; теперь 20Гц — ОК.
-Если боксов нет: смотреть `entity-list:` в логе (layout подтверждён?) и что в матче есть враги (тиммейтов не рисуем).
+**Диагностика v79:** если ESP включён, но боксов нет — в лог раз в 2 сек `esp: ...` с причиной (layout не подтверждён / вне матча / целей в радиусе нет, врагов N, вне радиуса M). Sanity view matrix: |row0| вне [0.5;1.5] → WARNING «view matrix выглядит битой» (стухший dwViewMatrix = боксы «не на игроках»).
+Если боксы «не на игроках»: 1) `entity-list:` в логе (layout подтверждён?), 2) WARNING про view matrix, 3) обнови neverwin.ini.
 
 ---
 
@@ -209,13 +234,22 @@ UGame-схема: перебор pitch 0.125°×768 → seed = ComputeRandomSeed
 Полная структура: RGB-полоска 2px (анимация по hue), заголовок + Save, sidebar 13 вкладок c Font Awesome Solid 900 (извлечён из fa.h MemeSense-зипа в assets/fa_solid.hpp, 414КБ, грузится ТОЛЬКО на диапазон U+E000..U+F8FF), активная вкладка — красная полоса слева.
 Вкладки: Legitbot/AimAssist (= Combat: aim speed 30-8000, smooth, updates/sec 1-120, prediction, trigger, silent, nospread), Players/Chams (диагностика), Items/Visuals (recoil/gamesense), World/View (ESP), Indicators, Misc (antiaim+spin, clantag, ragebot+все его слайдеры), Movement (VeloBhop/ExtHope), Inventory, Configs (unload).
 **Баг «иконки вместо текста» — разобран:** в fonts.zip оба ttf оказались обычными текстовыми шрифтами (cmap только ASCII); иконки теперь — настоящий FA, текст — Segoe/Arial с кириллицей, FontDefault на тексте.
+**Баг «ромб с вопросом» на вкладках — разобран (v79):** ImGui 1.93 WIP НЕ делает cross-font fallback (FindGlyph → FallbackChar U+FFFD = ромб с вопросом). Кодпоинты иконок U+F0xx шли в label Selectable, который рендерился текстовым шрифтом (Segoe — глифов F0xx нет). Лечится: иконка рисуется отдельно через `PushFont(g_iconFont)` (текст — шрифтом по умолчанию). fa_solid.ttf валиден, cmap доходит до U+1FAC1 (иконки + часть emoji).
+**«Вкладки вылазят за меню» (v79):** строки табов — InvisibleButton шириной sidebar-4px (раньше Selectable на всю 186px упирался в край контента), позиция окна clamp-ится в экран.
+Misc: spin speed теперь **град/с (10..3600, дефолт 720)** — «насколько быстро крутить», интегрируется по времени (был множитель шага за итерацию).
 Клавиши: P/INSERT меню, END unload, F1 aim on/off (режим — в меню), F2 antiaim, F3 recoil, F4 VeloBhop, F5 gamesense, F6 ragebot, X — ExtHope.
 
 ---
 
 ## 13. Clantag
 
-VEngineCvar007 (tier0.dll CreateInterface) → cvar «name» (linked-список entries, FNV-поиск не нужен — обычный strcmp-обход) → базовый ник; Source2EngineToClient001 → vtable[40] ExecuteClientCmd → `setinfo name "..."`. Анимация [ → [N → ... → [NeverWin] (250мс/кадр, 3с пауза, обратный разбор). Оба пути подтверждены логом (engine command path is active). Ник «VAC TEST» захватился корректно; кириллица в логе отображается криво (UTF-8 в wchar-лог) — косметика, в игру уходит правильно.
+VEngineCvar007 (tier0.dll CreateInterface) → cvar «name» (linked-список entries, FNV-поиск не нужен — обычный strcmp-обход) → базовый ник; Source2EngineToClient001 → vtable[40] ExecuteClientCmd → `setinfo name "..."`. Анимация [ → [N → ... → [NeverWin] (250мс/кадр, 3с пауза, обратный разбор). Оба пути подтверждены логом (engine command path is active). Ник «VAC TEST» захватился корректно.
+
+**Почему «не работает» у части людей (v79):**
+1. **Лимит 32 символа.** CS2 отклоняет имя длиннее 32 символов. Длинный ник + «[NeverWin] » (11) = >32 → setinfo молча не применялось. Теперь при длинном нике берётся короткий тег «[NW] » (5) + страховочный обрыв по границе UTF-8 в 32.
+2. **Логи.** Раньше базовый ник в лог уходил через `%S` (wide-формат) с `char*` UTF-8 аргументом: байты UTF-8 (в т.ч. 4 байта эмодзи) переинтерпретировались как UTF-16 → «ромб с вопросом»/кракозябры в логе и DebugView. В игру при этом уходило ПРАВИЛЬНО (setinfo получает тот же UTF-8). Исправлено: `detail::ToWide()` (CP_UTF8→UTF-16) перед логом.
+
+Важно: clantag меняет ТВОЁ имя (видно в scoreboard/spectator/death), а не чужой HUD. Если в логе `cvar 'name' not found` — VEngineCvar007 ещё не поднят (игра грузится), ретраится каждый тик до захвата.
 
 ---
 
@@ -247,9 +281,26 @@ Push-конфликты: сначала `git stash push -u`, `git rebase FETCH_H
 
 ## 17. Что делать дальше (по приоритету)
 
-1. **Bhop-стабильность**: подставить cmd+0x58 как arena-fallback в AcquireSubtickStep/CRC (диаг v70: q58=стабильный ptr) → если subtick-пара заработает, убрать «crc skipped».
-2. **Silent aim**: боевой тест; при промахах — исследовать input_history (CSGOInputHistoryEntryPB, тоже в PB-хедерах).
-3. **Entity layout**: если снова fallback после следующего апдейта — сначала stride-кандидаты 0x70/0x78/0x80 + m_hPawn offset (меняется!), потом Ghidra.
-4. NoSpread: реальные inaccuracy/spread из weapon vdata вместо 0.01.
-5. Меню: Save → реальная сериализация конфига; Grenade Helper-вкладка если нужна.
-6. Автоперенос оффсетов: при апдейте CS2 — cs2-dumper → output.zip в ветку → diff dw-оффсетов → offsets.hpp+ini+сборка. dw-меняются ВСЕГДА, schema почти никогда; m_hPawn менялся (0x6BC→0x600) — проверять тоже.
+1. **Боевые тесты v79**: silent aim (F1+Silent, камера стоит — пули должны лететь по цели), antiaimless (F2, «в пол+спин» в usercmd, скорость град/с), nospread (лог `nospread ready`?), ESP (диаг `esp:` в логе).
+2. **Silent aim промахи** (если будет): копать input_history (CSGOInputHistoryEntryPB, тоже в PB-хедерах) — сервер может брать углы оттуда; проверить, что CRC сервер реально принимает (symptom: ресинки/вылет «cheater detected»).
+3. **Bhop-стабильность**: подставить cmd+0x58 как arena-fallback в AcquireSubtickStep (в pbcmd::RecomputeMoveCrc кандидат cmd+0x58 уже добавлен) → если subtick-пара заработает, убрать «crc skipped».
+4. **Entity layout**: если снова fallback после апдейта — stride-кандидаты 0x70/0x78/0x80 + m_hPawn offset (меняется!), потом Ghidra.
+5. NoSpread: динамический inaccuracy из weapon vdata (сейчас 0.01); при промахах — сверить сигнатуры с свежим patterns.json.
+6. Меню: Save → реальная сериализация конфига; Grenade Helper-вкладка если нужна.
+7. Автоперенос оффсетов: при апдейте CS2 — cs2-dumper → output.zip в ветку → diff dw-оффсетов → offsets.hpp+ini+сборка. dw-меняются ВСЕГДА, schema почти никогда; m_hPawn менялся (0x6BC→0x600) — проверять тоже. PATTERNS тоже меняются (NoSpread seed-пролог сменился 14177→14178!).
+
+## 18. v79 — что сделано (2026-09-03, источник; сборку сделать)
+
+Ветка: `arena/01a06754-neverwin-cs2` (заведена от 53c94d1). Компилируется (zig c++ -target x86_64-windows-gnu, все TUs OK; линк на Windows).
+
+1. **features.cpp: вычищена внедрёная дёргающая строка** на include nonagon/ragebot.hpp (мусор вида `assistant to=functions...` — prompt-injection/спам, компилятор жевал warning'ами; на MSVC могло дать ошибку).
+2. **Silent aim**: канал через хук CreateMove (ApplySilentAnglesToTick) + `pbcmd::RecomputeMoveCrc` (новый, в pb_cmd.hpp: сериализация живых buttons+viewangles → stringCopy → serializeMoveCrc, arena: baseRaw+8-биты → cmd+0x18 → cmd+0x58). Виртуальный угол в доводчике (камера стоит). Release silent-канала при потере цели/F1 off/silent off (silentOwner 1/2).
+3. **F2 antiaimless — silent + скорость «насколько быстро»**: углы 89°/spinYaw в silent-канал; spinSpeed = град/с (10..3600, дефолт 720), интегрируется по GetTickCount dt (clamp 5..50мс); старт спина от текущего yaw камеры; камера не трогается вовсе.
+4. **NoSpread**: паттерны 14178 (seed-пролог из patterns.json + fallback старый; маска CalcSpread исправлена — была сдвинута и не матчила никогда). spread из vdata m_flSpread (0x758) в Solve (aim + rage).
+5. **«Наводится не на голову, а чуть сзади» — причины и фиксы:**
+   - raimv2-брютфорс выбирал раскладку по «совпадению углов с камерой» — мог попасть в слот кольца с УСТАРЕВШИМИ углами → в бой уходил угол на 1-2 кадра позади. Теперь `WriteAnglesToUserCmd`: сначала ПОДТВЕРЖДЁННАЯ PB-цепочка (InspectRuntime→pbcmd), брютфорс только fallback. (То же для ragebot.)
+   - Голова = bone 7 из РЕНДЕР-скелета: он отстаёт от сим-позиции на интерполяцию, сервер хитит по сим-позиции (lag comp) → у движущейся цели аим «позади». Лечится prediction-слайдером (дефолт поднят 0.12→0.15 с) — крутить под себя.
+   - GetEyePosition: viewOffset-окна ужесточены (x/y ±5, z -20..80; были ±100/±300) — мусор в m_vecViewOffset больше не сдвигает все углы.
+6. **Меню**: иконки вкладок через PushFont(g_iconFont) (убран «ромб с вопросом» = U+FFFD fallback), строки InvisibleButton с отступом 4px, позиция окна clamp в экран.
+7. **ESP**: дальность-слайдер 25..400 м (дефолт 190), «ESP teammates», диагностика в лог раз в 2 с (`esp: ...`), sanity view matrix (|row0|).
+8. **Clantag**: тег [NW] для длинных ников (лимит 32 символа), ToWide перед логом (убран «ромб с вопросом» в логе от `%S`+char*).

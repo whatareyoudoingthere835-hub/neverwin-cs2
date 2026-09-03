@@ -276,20 +276,39 @@ namespace usercmd_probe {
             out.stringCopy = ResolveRelativeCall(found);
         out.serializeMoveCrc = FindBytes(client, kSerializeCrc, kSerializeCrcMask, sizeof(kSerializeCrc));
 
-        // NoSpread helpers (signatures from the UGame NoSpread source, "updated" marks).
-        // ComputeRandomSeed: client.dll "48 89 5C 24 ? 57 48 81 EC ? ? ? ? 48 8B F9 41 8B ?"
-        static const uint8_t kComputeSeed[] = {
-            0x48,0x89,0x5C,0x24,0,0x57,0x48,0x81,0xEC,0,0,0,0,0x48,0x8B,0xF9,
-            0x41,0x8B,0
+        // NoSpread helpers.
+        //
+        // ComputeRandomSeed: пролог МЕНЯЛСЯ между билдами. На 14178
+        // (patterns.json, rva 0xCB9A30) реальное начало:
+        //   48 89 5C 24 08 57 48 81 EC F0 00 00 00 F3 0F 10 0A
+        //   48 8D 8C 24 10 01 00 00 41 8B D8 48 8B FA E8 ...
+        // (movss xmm0,[rdx] — rdx = указатель на QAngle; аргументы
+        //  (pawn, angles*, tick) как и раньше). Сначала ищем свежий пролог,
+        // затем старый (UGame) как fallback для других билдов.
+        static const uint8_t kComputeSeed14178[] = {
+            0x48,0x89,0x5C,0x24,0,0x57,0x48,0x81,0xEC,0,0,0,0,
+            0xF3,0x0F,0x10,0x0A,0x48,0x8D,0x8C,0x24,0,0,0,0,
+            0x41,0x8B,0xD8,0x48,0x8B,0xFA,0xE8
         };
-        static const char kComputeSeedMask[] = "xxxx?xxxx????xxx xx";
-        out.computeRandomSeed = FindBytes(client, kComputeSeed, kComputeSeedMask, sizeof(kComputeSeed));
-        // CalculateSpread: client.dll "48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 4C 63 EA"
+        static const char kComputeSeed14178Mask[] = "xxxx?xxxx????xxxxxxxx????xxxxxxx";
+        out.computeRandomSeed = FindBytes(client, kComputeSeed14178, kComputeSeed14178Mask, sizeof(kComputeSeed14178));
+        if (!out.computeRandomSeed) {
+            static const uint8_t kComputeSeed[] = {
+                0x48,0x89,0x5C,0x24,0,0x57,0x48,0x81,0xEC,0,0,0,0,0x48,0x8B,0xF9,
+                0x41,0x8B,0
+            };
+            static const char kComputeSeedMask[] = "xxxx?xxxx????xxxxx?";
+            out.computeRandomSeed = FindBytes(client, kComputeSeed, kComputeSeedMask, sizeof(kComputeSeed));
+        }
+        // CalculateSpread: "48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 41 54
+        // 41 55 41 56 41 57 48 81 EC ? ? ? ? 4C 63 EA" (34 байта).
+        // Старая маска была короче/со сдвигом и матчу никогда не давала —
+        // из-за этого NoSpread молча отключался даже при живом паттерне.
         static const uint8_t kCalcSpread[] = {
             0x48,0x8B,0xC4,0x48,0x89,0x58,0,0x48,0x89,0x68,0,0x48,0x89,0x70,0,0x57,
             0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x81,0xEC,0,0,0,0,0x4C,0x63,0xEA
         };
-        static const char kCalcSpreadMask[] = "xxxxxx?xxxxx?xxxx xxxxxxxx????xxxxxxxxx";
+        static const char kCalcSpreadMask[] = "xxxxxx?xxx?xxx?xxxxxxxxxxxx????xxx";
         out.calculateSpread = FindBytes(client, kCalcSpread, kCalcSpreadMask, sizeof(kCalcSpread));
         return out;
     }
