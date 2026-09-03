@@ -9,6 +9,8 @@
 #include "offsets.hpp"
 #include "assets/gui_icons.hpp"
 #include "assets/esp_icons.hpp"
+#include "assets/fa_solid.hpp"
+#include "assets/icons_fontawesome.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_win32.h"
@@ -61,7 +63,7 @@ namespace {
     ResizeFn   g_origResize   = nullptr;
     RelMouseFn g_origRelMouse = nullptr;
     bool  g_imguiReady    = false;
-    ImFont* g_iconFont = nullptr;
+    ImFont* g_iconFont = nullptr;   // Font Awesome (иконки вкладок)
     HANDLE g_eventUnhooked = nullptr;
 
     // --- окно игры (EnumWindows: наше, видимое, без владельца) ---
@@ -165,14 +167,13 @@ namespace {
         ImFontConfig cfg{};
         cfg.PixelSnapH = true;
         cfg.FontDataOwnedByAtlas = false;
-        // Встроенные icon fonts из предоставленного fonts.zip: DLL не зависит
-        // от внешних файлов, что важно при инжекте external loader-ом.
+        // Font Awesome Solid из MemeSense-набора: иконки вкладок по кодпоинтам
+        // U+E000..U+F8FF (PUA). Текстовым шрифтом остаётся системный Segoe/Arial
+        // с кириллицей — прошлый баг «иконки вместо текста» был из-за обратного.
+        static const ImWchar iconRanges[] = { 0xE000, 0xF8FF, 0 };
         g_iconFont = ImGui::GetIO().Fonts->AddFontFromMemoryTTF(
-            const_cast<unsigned char*>(gui_icons_ttf), static_cast<int>(gui_icons_ttf_size),
-            16.0f, &cfg);
-        ImGui::GetIO().Fonts->AddFontFromMemoryTTF(
-            const_cast<unsigned char*>(esp_icons_ttf), static_cast<int>(esp_icons_ttf_size),
-            16.0f, &cfg);
+            const_cast<unsigned char*>(fa_solid_ttf), static_cast<int>(fa_solid_ttf_size),
+            16.0f, &cfg, iconRanges);
         for (const wchar_t* path : candidates) {
             if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES)
                 continue;
@@ -312,55 +313,114 @@ namespace {
         }
     }
 
-    // --- меню: Neverwin в visual style MemeSense (sidebar + page cards). ---
+    // --- меню: полная структура MemeSense (RGB-полоска, sidebar с иконками
+    // FA, заголовок + Save в правом углу). Название чита — NEVERWIN. ---
+    void DrawRgbStrip(ImDrawList* draw, const ImVec2& pos, float width, float height) {
+        // 2px анимированная радужная полоса на весь верх окна.
+        const float t = static_cast<float>(ImGui::GetTime());
+        for (int x = 0; x < static_cast<int>(width); ++x) {
+            const float hue = fmodf((t * 0.08f) + static_cast<float>(x) / width, 1.0f);
+            ImVec4 col = ImColor::HSV(hue, 0.85f, 1.0f).Value;
+            draw->AddRectFilled({pos.x + static_cast<float>(x), pos.y},
+                                {pos.x + static_cast<float>(x) + 1.0f, pos.y + height},
+                                ImGui::GetColorU32(col));
+        }
+    }
+
     void RenderMenu() {
         if (!gui::g_menuOpen.load())
             return;
 
         const float w = ImGui::GetIO().DisplaySize.x;
         const float h = ImGui::GetIO().DisplaySize.y;
-        ImGui::SetNextWindowSize(ImVec2(760.0f, 500.0f), ImGuiCond_Always);
-        ImGui::SetNextWindowPos(ImVec2((w - 760.0f) * 0.5f, (h - 500.0f) * 0.35f), ImGuiCond_Always);
+        const ImVec2 menuSize(780.0f, 540.0f);
+        ImGui::SetNextWindowSize(menuSize, ImGuiCond_Always);
+        ImGui::SetNextWindowPos(ImVec2((w - menuSize.x) * 0.5f, (h - menuSize.y) * 0.35f), ImGuiCond_Always);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 5.0f);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.055f, 0.06f, 0.075f, 1.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.10f, 0.10f, 0.10f, 1.0f)); // #1a1a1a
         ImGui::Begin("NEVERWIN", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar);
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar |
+                     ImGuiWindowFlags_NoScrollbar);
 
-        static int page = 0;
-        const char* pages[] = { "Combat", "Movement", "Misc", "Settings" };
+        static int page = 0; // 0 Combat ... по табличке ниже
+        struct TabDef { const char* name; const char* icon; };
+        static const TabDef tabs[] = {
+            { "Legitbot",       ICON_FA_CROSSHAIRS },
+            { "Aim Assist",     ICON_FA_COMPUTER_MOUSE },
+            { "Players",        ICON_FA_USER },
+            { "Chams",          ICON_FA_USER_ASTRONAUT },
+            { "Items",          ICON_FA_GUN },
+            { "Visuals",        ICON_FA_FIRE },
+            { "World",          ICON_FA_GLOBE },
+            { "View",           ICON_FA_CAMERA },
+            { "Indicators",     ICON_FA_CHART_LINE },
+            { "Misc",           ICON_FA_BARS_STAGGERED },
+            { "Movement",       ICON_FA_PERSON_RUNNING },
+            { "Inventory",      ICON_FA_PAINTBRUSH },
+            { "Configs",        ICON_FA_FOLDER_OPEN },
+        };
+        constexpr int kTabCount = sizeof(tabs) / sizeof(tabs[0]);
         const ImVec4 accent(0.94f, 0.16f, 0.25f, 1.0f);
-        const float sidebarWidth = 180.0f;
+        const float sidebarWidth = 186.0f;
+        const float headerHeight = 42.0f;
+        const float stripHeight = 2.0f;
 
-        ImGui::BeginChild("##nw_sidebar", ImVec2(sidebarWidth, 0), false);
         ImDrawList* draw = ImGui::GetWindowDrawList();
-        const ImVec2 sidePos = ImGui::GetWindowPos();
-        draw->AddRectFilled(sidePos, ImVec2(sidePos.x + sidebarWidth, sidePos.y + 500.0f),
-                            ImGui::GetColorU32(ImVec4(0.045f, 0.048f, 0.06f, 1.0f)));
-        ImGui::SetCursorPos(ImVec2(24, 28));
-        ImGui::TextColored(accent, "NEVER"); ImGui::SameLine(0, 0); ImGui::Text("WIN");
-        ImGui::SetCursorPosX(24); ImGui::TextDisabled("premium internal");
-        ImGui::SetCursorPosY(98);
-        for (int i = 0; i < 4; ++i) {
-            ImGui::PushStyleColor(ImGuiCol_Header, i == page ? ImVec4(accent.x, accent.y, accent.z, .18f) : ImVec4(0,0,0,0));
-            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(accent.x, accent.y, accent.z, .12f));
-            ImGui::SetCursorPosX(12);
-            if (ImGui::Selectable(pages[i], i == page, 0, ImVec2(156, 38))) page = i;
-            ImGui::PopStyleColor(2);
+        const ImVec2 winPos = ImGui::GetWindowPos();
+        DrawRgbStrip(draw, winPos, menuSize.x, stripHeight);
+
+        // --- Заголовок: имя + Save в правом углу ---
+        ImGui::SetCursorPos(ImVec2(sidebarWidth + 20.0f, 12.0f));
+        ImGui::PushFont(nullptr);
+        ImGui::TextColored(ImVec4(1, 1, 1, 0.9f), "NEVERWIN");
+        ImGui::SameLine();
+        ImGui::TextDisabled("cs2");
+        ImGui::SetCursorPos(ImVec2(menuSize.x - 96.0f, 8.0f));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.16f, 0.16f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
+        if (ImGui::Button("Save", ImVec2(80.0f, 26.0f))) {
+            // TODO: сериализация конфига — пока просто лог.
+            NW_LOG(L"config: Save нажат (сериализация пока не реализована).");
         }
-        ImGui::SetCursorPos(ImVec2(24, 455));
+        ImGui::PopStyleColor(2);
+        ImGui::PopFont();
+
+        // --- Sidebar ---
+        ImGui::SetCursorPos(ImVec2(0, stripHeight));
+        ImGui::BeginChild("##nw_sidebar", ImVec2(sidebarWidth, menuSize.y - stripHeight), false);
+        draw->AddRectFilled({winPos.x, winPos.y + stripHeight},
+                            {winPos.x + sidebarWidth, winPos.y + menuSize.y},
+                            ImGui::GetColorU32(ImVec4(0.085f, 0.085f, 0.09f, 1.0f)));
+        ImGui::SetCursorPos(ImVec2(0, 8.0f));
+        for (int i = 0; i < kTabCount; ++i) {
+            const bool active = (i == page);
+            const ImVec2 rowPos = ImGui::GetCursorScreenPos();
+            const float rowH = 30.0f;
+            if (active)
+                draw->AddRectFilled(rowPos, {rowPos.x + 2.5f, rowPos.y + rowH},
+                                    ImGui::GetColorU32(accent));
+            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.14f, 0.14f, 0.15f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, active ? accent : ImVec4(0.62f, 0.62f, 0.66f, 1.0f));
+            char label[64];
+            snprintf(label, sizeof(label), "%s  %s", tabs[i].icon, tabs[i].name);
+            if (ImGui::Selectable(label, active, 0, ImVec2(sidebarWidth, rowH))) page = i;
+            ImGui::PopStyleColor(3);
+        }
+        ImGui::SetCursorPos(ImVec2(14.0f, menuSize.y - stripHeight - 26.0f));
         ImGui::TextDisabled("tg: @fkfwj");
         ImGui::EndChild();
 
+        // --- Content ---
         ImGui::SameLine(0, 0);
         ImGui::BeginChild("##nw_content", ImVec2(0, 0), false);
-        ImGui::SetCursorPos(ImVec2(28, 28));
-        ImGui::TextColored(accent, "%s", pages[page]);
-        ImGui::Separator();
-        ImGui::SetCursorPosX(28);
-        ImGui::BeginChild("##nw_page", ImVec2(-28, -36), false);
+        ImGui::SetCursorPos(ImVec2(22.0f, headerHeight));
+        ImGui::BeginChild("##nw_page", ImVec2(-22.0f, -30.0f), false);
 
-        if (page == 0) {
+        // Страницы маппим на наши реальные функции.
+        if (page == 0 || page == 1) {
+            // Legitbot / Aim Assist
             bool enabled = g_features.reverseAimEnabled.load();
             if (ImGui::Checkbox("Reverse aim enabled [F1]", &enabled)) g_features.reverseAimEnabled.store(enabled);
             int mode = g_features.reverseAimMode.load() - 1;
@@ -373,27 +433,65 @@ namespace {
             int rate = g_features.reverseAimRate.load();
             if (ImGui::SliderInt("Aim updates per second", &rate, 1, 120)) g_features.reverseAimRate.store(rate);
             ImGui::TextDisabled("Warning: high update rates may cause lag.");
-            bool trig = g_features.reverseAimTrigger.load();
-            if (ImGui::Checkbox("Triggerbot", &trig)) g_features.reverseAimTrigger.store(trig);
-            bool ns = g_features.noSpread.load();
-            if (ImGui::Checkbox("NoSpread (aim + rage)", &ns)) g_features.noSpread.store(ns);
-            bool silent = g_features.silentAim.load();
-            if (ImGui::Checkbox("Silent aim (usercmd only)", &silent)) g_features.silentAim.store(silent);
             float pred = g_features.reverseAimPrediction.load();
             if (ImGui::SliderFloat("Position prediction (s)", &pred, 0.f, .35f, "%.3f")) g_features.reverseAimPrediction.store(pred);
-            ImGui::Spacing(); ImGui::Separator();
+            bool trig = g_features.reverseAimTrigger.load();
+            if (ImGui::Checkbox("Triggerbot", &trig)) g_features.reverseAimTrigger.store(trig);
+            bool silent = g_features.silentAim.load();
+            if (ImGui::Checkbox("Silent aim (usercmd only)", &silent)) g_features.silentAim.store(silent);
+            bool ns = g_features.noSpread.load();
+            if (ImGui::Checkbox("NoSpread (aim + rage)", &ns)) g_features.noSpread.store(ns);
+        } else if (page == 2 || page == 3) {
+            // Players / Chams — сканер и цели
+            ImGui::TextColored(accent, "Players");
+            ImGui::Separator();
+            ImGui::Text("client.dll: 0x%llX", static_cast<unsigned long long>(g_state.clientBase.load()));
+            ImGui::Text("Local: 0x%llX (hp %d, team %d)",
+                        static_cast<unsigned long long>(g_state.localPlayer.load()),
+                        g_state.localHealth.load(), g_state.localTeam.load());
+            ImGui::Text("Entity layout: %s", g_state.entityLayoutVerified.load() ? "verified" : "fallback");
+            ImGui::TextDisabled("Chams требуют hook материалов — пока не реализованы.");
+        } else if (page == 4 || page == 5) {
+            // Items / Visuals
+            ImGui::TextColored(accent, "Visuals");
+            ImGui::Separator();
+            bool recoil = g_features.visualRecoil.load();
+            if (ImGui::Checkbox("Visual recoil x4 [F3]", &recoil)) g_features.visualRecoil.store(recoil);
+            bool gs = g_features.gamesense.load();
+            if (ImGui::Checkbox("Gamesense [F5]", &gs)) g_features.gamesense.store(gs);
+        } else if (page == 6 || page == 7) {
+            // World / View
+            ImGui::TextColored(accent, "World / View");
+            ImGui::Separator();
+            ImGui::TextDisabled("Skybox / fog / FOV — в планах.");
+            bool esp = g_features.espEnabled.load();
+            if (ImGui::Checkbox("ESP box", &esp)) g_features.espEnabled.store(esp);
+            bool health = g_features.espHealth.load();
+            if (ImGui::Checkbox("ESP health bar", &health)) g_features.espHealth.store(health);
+            bool dist = g_features.espDistance.load();
+            if (ImGui::Checkbox("ESP distance", &dist)) g_features.espDistance.store(dist);
+        } else if (page == 8) {
+            // Indicators
+            ImGui::TextColored(accent, "Indicators");
+            ImGui::Separator();
+            ImGui::Text("HP: %d", g_state.localHealth.load());
+            ImGui::Text("Team: %d", g_state.localTeam.load());
+            ImGui::Text("Offsets: %s", g_state.offsetsFromIni.load() ? "ini" : "built-in");
+        } else if (page == 9) {
+            // Misc
+            ImGui::TextColored(accent, "Misc");
+            ImGui::Separator();
             bool aa = g_features.antiAimless.load();
             if (ImGui::Checkbox("Antiaimless [F2]", &aa)) g_features.antiAimless.store(aa);
             float spin = g_features.spinSpeed.load();
             if (ImGui::SliderFloat("Spin speed", &spin, 0.f, 10.f, "x%.0f")) g_features.spinSpeed.store(spin);
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::TextColored(accent, "Ragebot");
+            bool clanTag = g_features.clanTag.load();
+            if (ImGui::Checkbox("ClanTag [NeverWin]", &clanTag)) g_features.clanTag.store(clanTag);
             bool rage = g_features.ragebot.load();
             if (ImGui::Checkbox("Nonagon Ragebot [F6]", &rage)) g_features.ragebot.store(rage);
             if (rage) {
-                bool trigger = g_features.rageAutoFire.load();
-                if (ImGui::Checkbox("Triggerbot / auto fire", &trigger)) g_features.rageAutoFire.store(trigger);
+                bool autoFire = g_features.rageAutoFire.load();
+                if (ImGui::Checkbox("Auto fire / trigger", &autoFire)) g_features.rageAutoFire.store(autoFire);
                 bool resolver = g_features.resolver.load();
                 if (ImGui::Checkbox("Resolver", &resolver)) g_features.resolver.store(resolver);
                 bool backtrack = g_features.backtrack.load();
@@ -404,40 +502,28 @@ namespace {
                 if (ImGui::SliderInt("Hitchance", &hitchance, 0, 100)) g_features.rageHitchance.store(hitchance);
                 int damage = g_features.rageMinDamage.load();
                 if (ImGui::SliderInt("Minimum damage", &damage, 1, 100)) g_features.rageMinDamage.store(damage);
-                ImGui::TextDisabled("Auto fire requires engine crosshair confirmation.");
             }
-        } else if (page == 1) {
+        } else if (page == 10) {
+            // Movement
             bool bhop = g_features.bhop.load();
-                if (ImGui::Checkbox("VeloBhop [F4]", &bhop)) g_features.bhop.store(bhop);
-                bool ext = g_features.extHope.load();
-                if (ImGui::Checkbox("ExtHope (hold X)", &ext)) g_features.extHope.store(ext);
-                int extRate = g_features.extHopeRate.load();
-                if (ImGui::SliderInt("ExtHope jumps per second", &extRate, 1, 128)) g_features.extHopeRate.store(extRate);
-                ImGui::TextDisabled("Velocity CreateMove / CUserCmd path.");
-        } else if (page == 2) {
-            ImGui::TextColored(accent, "tg: @fkfwj");
+            if (ImGui::Checkbox("VeloBhop [F4]", &bhop)) g_features.bhop.store(bhop);
+            bool ext = g_features.extHope.load();
+            if (ImGui::Checkbox("ExtHope (hold X)", &ext)) g_features.extHope.store(ext);
+            int extRate = g_features.extHopeRate.load();
+            if (ImGui::SliderInt("ExtHope jumps per second", &extRate, 1, 128)) g_features.extHopeRate.store(extRate);
+            ImGui::TextDisabled("Velocity CreateMove / CUserCmd path.");
+        } else if (page == 11) {
+            // Inventory
+            ImGui::TextColored(accent, "Inventory");
             ImGui::Separator();
-            bool clanTag = g_features.clanTag.load();
-            if (ImGui::Checkbox("ClanTag [NeverWin]", &clanTag)) g_features.clanTag.store(clanTag);
-            ImGui::TextDisabled("Animated tag + your captured normal nickname.");
-            ImGui::Separator();
-            bool esp = g_features.espEnabled.load();
-            if (ImGui::Checkbox("ESP box", &esp)) g_features.espEnabled.store(esp);
-            if (esp) {
-                bool health = g_features.espHealth.load();
-                if (ImGui::Checkbox("ESP health bar", &health)) g_features.espHealth.store(health);
-                bool dist = g_features.espDistance.load();
-                if (ImGui::Checkbox("ESP distance", &dist)) g_features.espDistance.store(dist);
-            }
+            ImGui::TextDisabled("Skin changer — в планах (нужен econ item system).");
         } else {
-            bool recoil = g_features.visualRecoil.load();
-            if (ImGui::Checkbox("Visual recoil x4 [F3]", &recoil)) g_features.visualRecoil.store(recoil);
-            bool gs = g_features.gamesense.load();
-            if (ImGui::Checkbox("Gamesense [F5]", &gs)) g_features.gamesense.store(gs);
+            // Configs
+            ImGui::TextColored(accent, "Configs");
             ImGui::Separator();
-            ImGui::Text("client.dll: 0x%llX", static_cast<unsigned long long>(g_state.clientBase.load()));
-            ImGui::Text("Local HP: %d | Team: %d", g_state.localHealth.load(), g_state.localTeam.load());
+            ImGui::TextDisabled("Сохранение/загрузка конфигов — в планах.");
             if (ImGui::Button("Detach / unload DLL", ImVec2(-1, 36))) gui::g_unloadRequested.store(true);
+            ImGui::TextDisabled("v%d | P/INSERT menu | END unload", NW_VERSION);
         }
         ImGui::EndChild();
         ImGui::EndChild();
