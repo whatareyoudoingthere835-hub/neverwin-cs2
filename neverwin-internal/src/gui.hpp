@@ -10,7 +10,8 @@ namespace gui {
     extern std::atomic<bool> g_unloadRequested;
 
     // 1 = рендер-хук встал в игру, меню рисует сама DLL (quint-схема).
-    // 0 = не встал (Vulkan / не нашли свопчейн) — меню отдаётся оверлею.
+    // 0 = не встал (Vulkan / не нашли свопчейн) — меню и ESP недоступны
+    // (оверлея в проекте больше нет), фичи работают.
     extern std::atomic<bool> g_inGameMenuReady;
 
     // Инициализация меню: свопчейн игры, MinHook на Present/ResizeBuffers,

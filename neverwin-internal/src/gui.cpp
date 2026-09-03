@@ -235,7 +235,34 @@ namespace {
 
     void DrawEsp(uintptr_t clientBase, uintptr_t entityList, uintptr_t localPlayer,
                  uint8_t localTeam) {
-        if (!g_features.espEnabled.load() || !localPlayer || !clientBase)
+        // Диагностика гейта: три условия «не готово» раньше уходили молча —
+        // в логе ноль строк и нельзя отличить «тумблер не включён» от
+        // «localPlayer=0». Теперь: при включении «ESP box» — ОДНА сводная
+        // строка со всеми входами; пока вход сломан — warning каждые 5 с.
+        // (Если in-game меню не встало, DrawEsp вообще не вызывается —
+        // тот случай логируется из feature loop, см. features.cpp.)
+        static bool wasEnabled = false;
+        static std::chrono::steady_clock::time_point lastGateWarn{};
+        const bool espOn = g_features.espEnabled.load();
+        if (espOn && !wasEnabled) {
+            NW_LOG(L"esp: включён. localPlayer=0x%llX localTeam=%d layout=%s clientBase=0x%llX entityList=0x%llX",
+                   static_cast<unsigned long long>(localPlayer), (int)localTeam,
+                   g_state.entityLayoutVerified.load() ? L"verified" : L"FALLBACK",
+                   static_cast<unsigned long long>(clientBase),
+                   static_cast<unsigned long long>(entityList));
+        }
+        const auto gateNow = std::chrono::steady_clock::now();
+        if (espOn && (localPlayer == 0 || clientBase == 0) &&
+            gateNow - lastGateWarn >= std::chrono::seconds(5)) {
+            lastGateWarn = gateNow;
+            if (localPlayer == 0)
+                NW_LOG(L"esp: localPlayer=0 — локального павна нет (лобби/загрузка?) либо стухший dwLocalPlayerPawn (0x%llX) — проверь neverwin.ini.",
+                       static_cast<unsigned long long>(offsets::g.dwLocalPlayerPawn));
+            else
+                NW_LOG(L"esp: clientBase=0 — потеряна база client.dll.");
+        }
+        wasEnabled = espOn;
+        if (!espOn || localPlayer == 0 || clientBase == 0)
             return;
 
         // Скан игроков дорогой (64 слота с безопасными чтениями) — 50 мс (20 Гц),
@@ -707,8 +734,8 @@ namespace gui {
             return false;
         }
 
-        // Хук CreateMove удалён: на твоём клиенте он не встал (см. neverwin.log),
-        // а F1/F2 вернулись на прямые записи viewAngles из цикла фич.
+        // Примечание: хук CreateMove ставится НЕ здесь, а из feature loop
+        // (TryHookCreateMove, features.cpp) — до цикла фич.
 
         // Свопчейн может появиться чуть позже DLL (инжект во время загрузки).
         for (int i = 0; i < 300 && !g_swapChain; ++i) {
@@ -718,7 +745,7 @@ namespace gui {
         }
         if (!g_swapChain) {
             NW_LOG(L"WARNING: свопчейн игры не найден (сигнатура rendersystemdx11 не совпала или Vulkan).");
-            NW_LOG(L"         меню будет в оверлее neverwin_overlay_vN.exe, фичи работают.");
+            NW_LOG(L"         in-game меню и ESP недоступны (оверлея в проекте нет), фичи работают.");
             return false;
         }
         NW_LOG(L"свопчейн игры: 0x%llX",

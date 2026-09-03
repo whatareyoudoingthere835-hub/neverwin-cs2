@@ -864,6 +864,17 @@ void RunFeatureLoop() {
         Sleep(1);
         HandleHotkeys();
         clantag::g_animator.Update(g_features.clanTag.load());
+        // ESP: тумблер включён, но in-game меню не встало (свопчейн-хук) —
+        // DrawEsp живёт в HookedPresent и не вызывается вообще, лог молчит.
+        // Логируем явно, чтобы «ESP выключен» не путали с «меню не встало».
+        static DWORD lastEspMenuWarn = 0;
+        if (g_features.espEnabled.load() && !gui::g_inGameMenuReady.load()) {
+            const DWORD nowEsp = GetTickCount();
+            if (nowEsp - lastEspMenuWarn > 5000) {
+                lastEspMenuWarn = nowEsp;
+                NW_LOG(L"esp: включён, но in-game меню не встало (свопчейн-хук) — боксы рисовать нечем. Ищи в логе: 'свопчейн игры' / 'WARNING: свопчейн игры не найден'.");
+            }
+        }
         const bool autoFireEnabled = g_features.ragebot.load() &&
                                      g_features.rageAutoFire.load() &&
                                      !gui::g_menuOpen.load();
