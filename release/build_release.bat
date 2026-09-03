@@ -9,8 +9,10 @@ rem   build_release.bat 2      — явная версия 2
 rem
 rem Результат:
 rem   release\neverwin_vN.dll
-rem   release\neverwin_injector_vN.exe
-rem   neverwin.ini копируется рядом с DLL, если уже лежит в release\
+rem   neverwin.ini остаётся рядом с DLL, если уже лежит в release\
+rem
+rem Инжектор НЕ собирается (с v79 удалён): DLL грузится внешним
+rem лоадером (LoadLibraryW в cs2.exe).
 rem ============================================================================
 cd /d "%~dp0"
 

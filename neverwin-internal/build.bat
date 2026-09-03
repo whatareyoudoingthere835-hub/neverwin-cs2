@@ -17,6 +17,6 @@ if errorlevel 1 exit /b 1
 echo.
 echo Готово:
 echo   DLL:      build\Release\neverwin.dll
-echo   Инжектор: build\Release\neverwin_injector.exe
 echo.
-echo Инжект: neverwin_injector.exe   (или: neverwin_injector.exe ^<PID^> ^<путь к dll^>)
+echo Загрузка: любой инжектор/лоадер (LoadLibraryW) в cs2.exe,
+echo либо: ваш инжектор  <PID>  build\Release\neverwin.dll

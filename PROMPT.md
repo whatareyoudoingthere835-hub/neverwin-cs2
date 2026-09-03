@@ -1,10 +1,12 @@
 # NEVERWIN — база знаний проекта (handoff-документ)
 
 > Документ: полная выжимка всего найденного/починенного за всю работу над читом.
-> Дата актуализации: 2026-09-03. Последняя сборка: **v78** (build CS2 14178).
-> **v79 (источник, 2026-09-03):** silent aim через CreateMove + CRC, antiaimless
-> silent + spin в град/с, nospread-паттерны 14178, иконки вкладки через FA-шрифт,
-> ESP-диагностика + дальность/тиммейты, clantag 32-символьный лимит. См. §18.
+> Дата актуализации: 2026-09-03. Последняя сборка: **v79** (build CS2 14178),
+> `release/neverwin_v79.dll` — собрана zig (x86_64-windows-gnu) на Linux.
+> **v79 (2026-09-03):** silent aim через CreateMove + CRC, antiaimless silent +
+> spin в град/с, nospread-паттерны 14178, иконки вкладки через FA-шрифт,
+> ESP-диагностика + дальность/тиммейты, clantag 32-символьный лимит,
+> **инжекторы удалены** (DLL грузится внешним лоадером). См. §18.
 > Цель: любой новый агент/сессия продолжает работу с этого файла без повторного реверса.
 
 ---
@@ -27,10 +29,10 @@ neverwin-internal/          — основной DLL-проект
     nospread.hpp            — компенсация спреда (seed → spread → углы)
     clantag.hpp             — анимированный [NeverWin] + базовый ник
     assets/                 — fa_solid.hpp (Font Awesome), icons_fontawesome.h, gui/esp_icons.hpp
-  injector/injector.cpp     — x64 инжектор (CreateRemoteThread + LoadLibraryW)
   thirdparty/               — imgui 1.93, minhook
   tools/dump_to_ini.py      — cs2-dumper output → neverwin.ini
-release/                    — neverwin_vN.dll / neverwin_injector_vN.exe (v78 актуальная)
+release/                    — neverwin_vN.dll (v79 актуальная; инжекторы с v79 удалены —
+                              загрузка DLL внешним лоадером, LoadLibraryW в cs2.exe)
 velocity/, quint/           — исходники-доноры (паттерны, логика, SDK)
 CHEAT.zip                   — сторонний исходник (SDK: CGameEntitySystem stride 0x70, bone cache)
 velocity-fixed-main...zip   — V16-фикс velocity (input.apply!, пароль архива: hvh.net)
@@ -139,7 +141,7 @@ GetUserCmd(controller, sequence)                  // = GetUserCmdBase - 0x90 (п
 - utl_vector_push: `>E8 ? ? ? ?< 4C 8B D0 45 8B 4A 10`
 - string_copy: `>E8 ? ? ? ?< 0F 10 45 88`
 - serialize_move_crc: `48 89 5C 24 ? 55 56 57 48 83 EC 30 49 8B C0 48 8B FA 48 8B F1 48 8B 09 F6 C1 03`
-- NoSpread (14178, из patterns.json): computeRandomSeed (rva 0xCB9A30) `48 89 5C 24 ? 57 48 81 EC ? ? ? ? F3 0F 10 0A 48 8D 8C 24 ? ? ? ? 41 8B D8 48 8B FA E8` (свежий пролог; fallback — старый UGame `...48 8B F9 41 8B ?`). calculateSpread (rva 0xCBA350) `48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 4C 63 EA`, маска 34 знака `xxxxxx?xxx?xxx?xxxxxxxxxxxx???xxx`. Подпись ComputeRandomSeed: `(pawn, angles*, tick)` → seed (rax). Строка лога: `nospread probe: seed=... spread=... (nospread ready)`.
+- NoSpread (14178, из patterns.json): computeRandomSeed (rva 0xCB9A30) `48 89 5C 24 ? 57 48 81 EC ? ? ? ? F3 0F 10 0A 48 8D 8C 24 ? ? ? ? 41 8B D8 48 8B FA E8` (свежий пролог; fallback — старый UGame `...48 8B F9 41 8B ?`). calculateSpread (rva 0xCBA350) `48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 4C 63 EA`, маска 34 знака `xxxxxx?xxx?xxx?xxxxxxxxxxxx????xxx` (4 `?` под sub rsp — не 3!). Подпись ComputeRandomSeed: `(pawn, angles*, tick)` → seed (rax). Строка лога: `nospread probe: seed=... spread=... (nospread ready)`.
 - V16-фикс добавлял: button_state_alloc (не портирован), csgo_input pattern `84C0740C488D0D*...` (не нужен — есть dwCSGOInput).
 
 Сканер умеет: byte+mask по образу модуля, resolve RIP-relative call (`>` в velocity-нотации = target E8).
@@ -213,7 +215,7 @@ UGame-схема: перебор pitch 0.125°×768 → seed = ComputeRandomSeed
 
 **Почему «не работал» (разбор v79):**
 1. Паттерн ComputeRandomSeed в коде был со СТАРОГО билда (`...48 8B F9 41 8B ?`) — пролог на 14178 другой (см. §6, паттерн 14178 из patterns.json: rva 0xCB9A30, `48 89 5C 24 08 57 48 81 EC F0 00 00 00 F3 0F 10 0A 48 8D 8C 24 10 01 00 00 41 8B D8 48 8B FA E8`). Найдено = 0 → no-op. Теперь сначала свежий пролог, fallback — старый.
-2. Маска CalculateSpread была сдвинута (39 знаков на 34 байта, лишний пробел) — матчу Никогда не давала. Теперь `xxxxxx?xxx?xxx?xxxxxxxxxxxx???xxx` (34).
+2. Маска CalculateSpread была сдвинута (39 знаков на 34 байта, лишний пробел) — матчу Никогда не давала. Теперь `xxxxxx?xxx?xxx?xxxxxxxxxxxx????xxx` (34; чётко 4 `?` под `sub rsp, imm32` — при 3 не сходится длина).
 3. inaccuracy/spread были заглушкой 0.01/0.01 → компенсация почти нулевая. Теперь spread берётся из weapon vdata `m_flSpread` (0x758); inaccuracy пока 0.01 (динамический спред не читаем).
 
 Лог-маркер: `nospread probe: seed=0x... spread=0x... (nospread ready)`.
@@ -253,10 +255,26 @@ VEngineCvar007 (tier0.dll CreateInterface) → cvar «name» (linked-списо�
 
 ---
 
-## 14. Инжектор и выгрузка
+## 14. Загрузка и выгрузка (инжекторы с v79 УДАЛЕНЫ)
 
-Инжектор: тулснап-поиск cs2.exe → VirtualAllocEx+WriteProcessMemory+CreateRemoteThread(LoadLibraryW) → проверка IsModuleLoaded. Работает. Пользователь иногда инжектит «экстернал-лоадером» — DLL тогда не находит neverwin.ini рядом (не критично: встроенные оффсеты актуальны).
+**Инжектор из проекта удалён** (v79, 2026-09-03): `neverwin-internal/injector/`,
+все `release/*_injector_v*.exe` (neverwin/quint/velocity), цели CMake и фазы
+сборки в build.bat/build_release.sh/.bat. DLL грузится внешним лоадером
+(`LoadLibraryW` в cs2.exe) — как и раньше делал пользователь «экстернал-лоадером».
+Если DLL не находит neverwin.ini рядом — работает на встроенных оффсетах
+(актуальны, но при апдейте CS2 лучше перегенерить ini).
 Выгрузка: END/кнопка → g_unloadRequested → Present-хук снимает всё сам (WNDPROC, MinHook, vtable swapchain) → event → FreeLibraryAndExitThread. Известные риски (не чинились): таймаут 3с при свёрнутой игре; vtable-восстановление через trampoline-адреса MinHook.
+
+## 14b. Сборка DLL на Linux (zig) — ПОДТВЕРЖДЕНО, v79 собрана так
+
+`bash release/build_release.sh [N]` — полный кросс-сбор на Linux БЕЗ mingw-w64
+(zig 0.16+ сам генерирует импорт-библиотеки из своих .def в
+`lib/libc/mingw/lib-common/`; единственный ручной .def — d3dcompiler_47,
+который скрипт шевелит через `zig dlltool` как fallback). 15 TUs по отдельной
+инвокации (-O2), линк `-shared` → `release/neverwin_vN.dll`. PE32+ x86-64,
+188 импортов, C++-рантайм статический (zig libc++), CRT-импорты api-ms-win-crt-*
+(есть в Win10, CS2 требует Win10 — ок; то же самое было у MSVC /MT).
+Проверка артефакта: `pefile` (PE32+/0x8664, таблица импортов, EntryPoint).
 
 ---
 
@@ -289,9 +307,10 @@ Push-конфликты: сначала `git stash push -u`, `git rebase FETCH_H
 6. Меню: Save → реальная сериализация конфига; Grenade Helper-вкладка если нужна.
 7. Автоперенос оффсетов: при апдейте CS2 — cs2-dumper → output.zip в ветку → diff dw-оффсетов → offsets.hpp+ini+сборка. dw-меняются ВСЕГДА, schema почти никогда; m_hPawn менялся (0x6BC→0x600) — проверять тоже. PATTERNS тоже меняются (NoSpread seed-пролог сменился 14177→14178!).
 
-## 18. v79 — что сделано (2026-09-03, источник; сборку сделать)
+## 18. v79 — что сделано (2026-09-03)
 
-Ветка: `arena/01a06754-neverwin-cs2` (заведена от 53c94d1). Компилируется (zig c++ -target x86_64-windows-gnu, все TUs OK; линк на Windows).
+Ветка: `arena/01a06754-neverwin-cs2` (заведена от 53c94d1). **Собрано и запушено:
+`release/neverwin_v79.dll`** (zig x86_64-windows-gnu на Linux, см. §14b).
 
 1. **features.cpp: вычищена внедрёная дёргающая строка** на include nonagon/ragebot.hpp (мусор вида `assistant to=functions...` — prompt-injection/спам, компилятор жевал warning'ами; на MSVC могло дать ошибку).
 2. **Silent aim**: канал через хук CreateMove (ApplySilentAnglesToTick) + `pbcmd::RecomputeMoveCrc` (новый, в pb_cmd.hpp: сериализация живых buttons+viewangles → stringCopy → serializeMoveCrc, arena: baseRaw+8-биты → cmd+0x18 → cmd+0x58). Виртуальный угол в доводчике (камера стоит). Release silent-канала при потере цели/F1 off/silent off (silentOwner 1/2).
@@ -304,3 +323,5 @@ Push-конфликты: сначала `git stash push -u`, `git rebase FETCH_H
 6. **Меню**: иконки вкладок через PushFont(g_iconFont) (убран «ромб с вопросом» = U+FFFD fallback), строки InvisibleButton с отступом 4px, позиция окна clamp в экран.
 7. **ESP**: дальность-слайдер 25..400 м (дефолт 190), «ESP teammates», диагностика в лог раз в 2 с (`esp: ...`), sanity view matrix (|row0|).
 8. **Clantag**: тег [NW] для длинных ников (лимит 32 символа), ToWide перед логом (убран «ромб с вопросом» в логе от `%S`+char*).
+9. **Инжекторы удалены**: `neverwin-internal/injector/`, `release/*_injector_v*.exe`, цель CMake, фазы в build.bat и build_release.sh. DLL грузится внешним лоадером.
+10. **Сборка v79 через zig на Linux** (без mingw-w64, см. §14b): `release/neverwin_v79.dll`, PE32+ x86-64, 1.87 MB.

@@ -11,15 +11,21 @@
 #   ./build_release.sh 2        # явная версия 2
 #
 # Результат:
-#   release/neverwin_vN.dll           — DLL (x64, статический рантайм)
-#   release/neverwin_injector_vN.exe  — инжектор
-#   release/neverwin.ini              — если уже лежит в release/, копируется
-#                                       рядом с DLL (DLL ищет ini рядом с собой)
+#   release/neverwin_vN.dll     — DLL (x64, статический рантайм)
+#   release/neverwin.ini        — если уже лежит в release/, остаётся рядом с DLL
+#                                 (DLL ищет ini рядом с собой)
+#
+# Инжектор НЕ собирается (с v79 удалён): DLL грузится внешним
+# лоадером (LoadLibraryW в cs2.exe) или любым инжектором.
 #
 # Примечание: каждый .cpp компилируется ОТДЕЛЬНОЙ инвокацией (-c), и только
 # потом идёт линковка. Так ниже пиковая память (одна инвокация со всеми
 # файлами разом тянет за собой компиляцию libc++ и на машинах с 4 ГБ может
 # упасть), и ошибка компиляции сразу указывает на файл.
+#
+# Линковка x86_64-windows-gnu работает БЕЗ установленного mingw-w64:
+# CRT/C++-рантайм — статика из zig, системные импорт-библиотеки zig находит
+# сам; единственный .def вручную — d3dcompiler_47 (ниже).
 # ============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -122,30 +128,9 @@ retry_on_cache "$ZIG" c++ -target x86_64-windows-gnu -O2 -shared \
     -o "$WORK/neverwin.dll" "${OBJS[@]}" \
     -ld3d11 -ldxgi -ldwmapi -limm32 -luser32 -lgdi32 -lkernel32 -L"$WORK" -ld3dcompiler
 
-# --- инжектор ---
-# injector.cpp объявляет wmain(); crt от mingw зовёт main(), поэтому мост:
-cat > "$WORK/wmain_bridge.cpp" <<'CPP'
-#include <windows.h>
-#include <shellapi.h>
-extern "C" int wmain(int argc, wchar_t* argv[]);
-extern "C" int main(int, char**) {
-    int argc = 0;
-    wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    const int rc = wmain(argc, wargv);
-    LocalFree(wargv);
-    return rc;
-}
-CPP
-retry_on_cache "$ZIG" c++ "${COMMON[@]}" -c "$SRC/injector/injector.cpp" -o "$WORK/injector.o"
-retry_on_cache "$ZIG" c++ "${COMMON[@]}" -c "$WORK/wmain_bridge.cpp" -o "$WORK/bridge.o"
-retry_on_cache "$ZIG" c++ -target x86_64-windows-gnu -O2 \
-    -o "$WORK/neverwin_injector.exe" "$WORK/injector.o" "$WORK/bridge.o" \
-    -luser32 -lkernel32 -lshell32
-
 # --- раскладка по release/ ---
 mkdir -p "$OUT"
-cp "$WORK/neverwin.dll"          "$OUT/neverwin_v${V}.dll"
-cp "$WORK/neverwin_injector.exe" "$OUT/neverwin_injector_v${V}.exe"
+cp "$WORK/neverwin.dll" "$OUT/neverwin_v${V}.dll"
 if [[ -f "$OUT/neverwin.ini" ]]; then
     echo "[i] neverwin.ini лежит рядом с DLL — оффсеты подхватятся."
 else
@@ -156,4 +141,4 @@ fi
 echo ""
 echo "Готово:"
 echo "  $OUT/neverwin_v${V}.dll"
-echo "  $OUT/neverwin_injector_v${V}.exe"
+echo "  (инжектора нет — грузи любым внешним лоадером/инжектором, LoadLibraryW в cs2.exe)"

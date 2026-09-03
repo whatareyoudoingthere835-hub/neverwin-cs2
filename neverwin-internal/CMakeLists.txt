@@ -61,30 +61,13 @@ target_compile_definitions(neverwin PRIVATE
 target_link_libraries(neverwin PRIVATE d3d11 dxgi d3dcompiler dwmapi imm32 user32 gdi32)
 
 # ---------------------------------------------------------------------------
-# Инжектор
-# ---------------------------------------------------------------------------
-add_executable(neverwin_injector injector/injector.cpp)
-target_compile_definitions(neverwin_injector PRIVATE
-    UNICODE
-    _UNICODE
-    _CRT_SECURE_NO_WARNINGS
-    WIN32_LEAN_AND_MEAN
-    NOMINMAX
-)
-
-# ---------------------------------------------------------------------------
 # Флаги по компиляторам
 # ---------------------------------------------------------------------------
 if(MSVC)
     target_compile_options(neverwin PRIVATE /W4 /utf-8)
-    target_compile_options(neverwin_injector PRIVATE /W4 /utf-8)
 endif()
 
 if(MINGW)
     target_compile_options(neverwin PRIVATE -Wall -Wextra)
     target_link_options(neverwin PRIVATE -static -static-libgcc -static-libstdc++)
-
-    target_compile_options(neverwin_injector PRIVATE -Wall -Wextra)
-    # -municode: wmain() как точка входа в MinGW
-    target_link_options(neverwin_injector PRIVATE -static -static-libgcc -static-libstdc++ -municode)
 endif()
