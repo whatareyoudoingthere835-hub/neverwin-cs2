@@ -10,6 +10,10 @@
 #include "usercmd_apply.hpp"
 #include "pb_cmd.hpp"
 #include "nospread.hpp"
+#include "velocity.hpp"
+#include "tracing.hpp"
+#include "extrapolation.hpp"
+#include "bhop.hpp"
 #include "minhook.h"
 #include "nonagon/ragebot.hpp"
 #include "nonagon/resolver.hpp"
@@ -31,6 +35,15 @@ namespace {
     using CreateMoveFn = void(__fastcall*)(uintptr_t, int, bool);
     CreateMoveFn g_origCreateMove = nullptr;
     std::atomic<bool> g_createMoveHooked{false};
+
+    // Global vars (curtime/frametime) с pattern-fallback из velocity-таблицы:
+    // dw-оффсеты текут первыми при смене билда, паттерны живут дольше.
+    [[nodiscard]] uintptr_t ResolveGlobalVars(uintptr_t clientBase) {
+        uintptr_t gv = mem::Read<uintptr_t>(clientBase + off.dwGlobalVars);
+        if (!gv || !mem::IsValidPtr(reinterpret_cast<const void*>(gv), 64))
+            gv = velo::Globals().globalVars;
+        return gv;
+    }
 
     struct Vector2 { float x = 0.0f; float y = 0.0f; };
 
@@ -176,7 +189,7 @@ namespace {
                 wasInAir = false;
                 // (Прежний subtick-burst на приземлении убран: ExtHope теперь
                 // работает автономно по клавише X с настраиваемым рейтингом.)
-                const uintptr_t globalVars = mem::Read<uintptr_t>(clientBase + off.dwGlobalVars);
+                const uintptr_t globalVars = ResolveGlobalVars(clientBase);
                 if (globalVars) {
                     const float curtime = mem::ReadFast<float>(globalVars + 0x30);
                     const float frametime = mem::ReadFast<float>(globalVars + 0x08);
@@ -217,6 +230,44 @@ namespace {
             // CUserCmd direct input state: +0x60=value, +0x68=changed.
             const uint64_t newValue = value & ~kInJump;
             const uint64_t newChanged = mem::ReadFast<uint64_t>(changed) | kInJump;
+
+            // Velocity-предсказание приземления: если pawn приземлится на
+            // fraction f текущего тика, в PB-команду уходит subtick-пара
+            // release(f-1/64) + press(f) — ре-пресс прыжка ровно в момент
+            // приземления (прыжок не теряется, spam-penalty не срабатывает).
+            const uint32_t fflags = mem::ReadFast<uint32_t>(pawn + off.m_fFlags);
+            const uintptr_t movementServices = mem::Read<uintptr_t>(
+                pawn + SCHEMA_OFF("C_BasePlayerPawn", "m_pMovementServices"_hash,
+                                  off.m_pMovementServices));
+            if (movementServices) {
+                const uintptr_t node = mem::Read<uintptr_t>(pawn + off.m_pGameSceneNode);
+                ent::Vector3 netOrigin{}, netVelocity{};
+                if (node)
+                    netOrigin = mem::ReadFast<ent::Vector3>(node + off.m_vecAbsOrigin);
+                netVelocity = mem::ReadFast<ent::Vector3>(pawn + off.m_vecAbsVelocity);
+                const bool holdingDuck = (value & 0x200ull) != 0; // IN_DUCK
+                const float landing = bhop::PredictLandingFraction(
+                    pawn, movementServices, netOrigin, netVelocity, fflags, holdingDuck);
+                if (landing > 0.0f) {
+                    const uintptr_t globalVars = ResolveGlobalVars(clientBase);
+                    if (globalVars) {
+                        const float curtime = mem::ReadFast<float>(globalVars + 0x30);
+                        const float frametime = mem::ReadFast<float>(globalVars + 0x08);
+                        if (curtime > 0.0f && frametime > 0.0f) {
+                            const float tickStart = curtime - frametime;
+                            const float pressWhen = tickStart + landing * frametime;
+                            const float releaseWhen = tickStart +
+                                std::clamp(landing - 1.0f / 64.0f,
+                                           1.0f / 64.0f, 63.0f / 64.0f) * frametime;
+                            if (releaseWhen < pressWhen)
+                                usercmd_apply::AddJumpSubtickPair(
+                                    runtime.command, releaseWhen, pressWhen,
+                                    g_userCmdPatterns);
+                        }
+                    }
+                }
+            }
+
             mem::WriteFast<uint64_t>(buttons, newValue);
             mem::WriteFast<uint64_t>(changed, newChanged);
             const auto stage = usercmd_apply::ApplyButtons(
@@ -240,12 +291,19 @@ namespace {
             return;
         // dwCSGOInput берём из живых оффсетов: зашитый 0x23BFB20 (14176)
         // после обновления до 14177 молча ломал установку хука.
-        const uintptr_t input = mem::Read<uintptr_t>(clientBase + off.dwCSGOInput);
-        const uintptr_t target = input ? mem::Read<uintptr_t>(input + sizeof(uintptr_t) * 5) : 0;
+        uintptr_t input = mem::Read<uintptr_t>(clientBase + off.dwCSGOInput);
+        if (!input || !mem::IsValidPtr(reinterpret_cast<const void*>(input), 64))
+            input = velo::Globals().csgoInput; // pattern-fallback (velocity)
+        uintptr_t target = input ? mem::Read<uintptr_t>(input + sizeof(uintptr_t) * 5) : 0;
+        // Slot 5 = CreateMove подтверждено velocity-паттерном (+28~ = 5*8).
+        // Если vtable-слот протёк — хукаем функцию напрямую по паттерну.
+        if (!target || !mem::IsValidPtr(reinterpret_cast<const void*>(target), 16))
+            target = velo::Globals().createMove;
         if (!target) {
-            NW_LOG(L"velobhop: CreateMove target не найден (dwCSGOInput=0x%llX ptr=0x%llX).",
+            NW_LOG(L"velobhop: CreateMove target не найден (dwCSGOInput=0x%llX ptr=0x%llX, pattern=0x%llX).",
                    static_cast<unsigned long long>(off.dwCSGOInput),
-                   static_cast<unsigned long long>(input));
+                   static_cast<unsigned long long>(input),
+                   static_cast<unsigned long long>(velo::Globals().createMove));
             return;
         }
         if (MH_CreateHook(reinterpret_cast<LPVOID>(target), reinterpret_cast<LPVOID>(&HookedCreateMove),
@@ -483,12 +541,14 @@ namespace {
                             uint8_t localTeam, ent::Vector3& outOrigin,
                             ent::Vector3& outVelocity, int& outHealth,
                             int& aliveCount, int& totalCount,
-                            TeamScanStats& stats) {
+                            TeamScanStats& stats,
+                            ent::PlayerSnapshot* outBest = nullptr) {
         ent::Vector3 bestOrigin{};
         ent::Vector3 bestVelocity{};
         float bestDist2 = FLT_MAX;
         int bestHealth = 0;
         bool found = false;
+        ent::PlayerSnapshot bestSnap{};
 
         const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
 
@@ -579,6 +639,7 @@ namespace {
                 bestOrigin = aimPosition;
                 bestVelocity = player.velocity;
                 bestHealth = player.health;
+                bestSnap = player;
                 found = true;
             }
         }
@@ -679,6 +740,8 @@ namespace {
         outOrigin = bestOrigin;
         outVelocity = bestVelocity;
         outHealth = bestHealth;
+        if (outBest)
+            *outBest = bestSnap;
         return true;
     }
 
@@ -820,6 +883,17 @@ void RunFeatureLoop() {
            static_cast<unsigned long long>(userCmdPatterns.calculateSpread),
            userCmdPatterns.ReadyForNoSpread() ? L"nospread ready" : L"nospread unavailable");
 
+    // Velocity-таблица паттернов (123abc.zip): фолбэки для dw-глобалов
+    // и tracing/cvars. Скан — один раз за 5 с только для ненайденных.
+    velo::Update();
+    NW_LOG(L"velo: паттерн-таблица %d/%zu (csgo_input=0x%llX entity_list=0x%llX view_matrix=0x%llX create_move=0x%llX trace_ray=0x%llX)",
+           velo::Globals().found, sizeof(velo::kTable) / sizeof(velo::kTable[0]),
+           static_cast<unsigned long long>(velo::Globals().csgoInput),
+           static_cast<unsigned long long>(velo::Globals().entityList),
+           static_cast<unsigned long long>(velo::Globals().viewMatrix),
+           static_cast<unsigned long long>(velo::Globals().createMove),
+           static_cast<unsigned long long>(velo::Globals().traceRay));
+
     const usercmd_probe::InputProbe inputProbe = usercmd_probe::ProbeCSGOInput(
         clientBase, off.dwCSGOInput, mem::Read<float>(clientBase + off.dwViewAngles),
         mem::Read<float>(clientBase + off.dwViewAngles + 4));
@@ -882,9 +956,24 @@ void RunFeatureLoop() {
         if (gui::g_unloadRequested.load())
             return;
 
-        const uintptr_t localPlayer = mem::Read<uintptr_t>(localPlayerPtr);
-        const uintptr_t localController =
+        // Pattern-fallback (velocity-таблица): если dw-оффсеты протекли
+        // (Valve сменил билд, ini старые), глобалы берём из паттернов.
+        uintptr_t localPlayer = mem::Read<uintptr_t>(localPlayerPtr);
+        if (!localPlayer || !mem::IsValidPtr(reinterpret_cast<const void*>(localPlayer), 64)) {
+            const uintptr_t lpc = velo::Globals().localPlayerController;
+            if (lpc && mem::IsValidPtr(reinterpret_cast<const void*>(lpc), 64)) {
+                const uint32_t h = mem::Read<uint32_t>(lpc +
+                    SCHEMA_OFF("CCSPlayerController", "m_hPlayerPawn"_hash,
+                               off.m_hPlayerPawn));
+                if (ent::IsValidPlayerHandle(h))
+                    localPlayer = ent::GetEntityByHandle(
+                        mem::Read<uintptr_t>(entityListPtr), h);
+            }
+        }
+        uintptr_t localController =
             mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerController);
+        if (!localController || !mem::IsValidPtr(reinterpret_cast<const void*>(localController), 64))
+            localController = velo::Globals().localPlayerController;
         // Command context может появиться через несколько секунд после DLL.
         // Не фиксируем единственный ранний null как окончательную неудачу.
         static bool userCmdRuntimeReady = false;
@@ -989,6 +1078,8 @@ void RunFeatureLoop() {
         }
 
         uintptr_t entityList = mem::Read<uintptr_t>(entityListPtr);
+        if (!entityList || !mem::IsValidPtr(reinterpret_cast<const void*>(entityList), 64))
+            entityList = velo::Globals().entityList; // pattern-fallback
         g_state.localPlayer.store(localPlayer);
         if (!localPlayer || !entityList)
             continue;
@@ -1157,17 +1248,50 @@ void RunFeatureLoop() {
             int targetHealth = 0;
             int aliveCount = 0, totalCount = 0;
             TeamScanStats stats;
+            ent::PlayerSnapshot bestSnap{};
             if (FindTeammateTarget(localPlayer, entityList, localTeam,
                                    targetOrigin, targetVelocity, targetHealth,
-                                   aliveCount, totalCount, stats)) {
+                                   aliveCount, totalCount, stats, &bestSnap)) {
                 const ent::Vector3 eye = ent::GetEyePosition(localPlayer);
                 if (eye.x != 0.0f || eye.y != 0.0f || eye.z != 0.0f) {
                     // targetOrigin is the real skeleton head bone when cache
                     // is available; prediction is applied to that position.
+                    ent::Vector3 aimTarget{ targetOrigin.x, targetOrigin.y, targetOrigin.z };
+                    bool extrapApplied = false;
+                    // Lagcomp-экстраполяция (velocity): сервер хитит по
+                    // СВОЕЙ позиции цели, поэтому симулируем pawn'а до
+                    // серверного тика (hull, гравитация, отскок от стен).
+                    // При успехе обычный velocity-предиктор не применяется.
+                    if (g_features.extrapolation.load() && bestSnap.HasPawn() &&
+                        bestSnap.sceneNode != 0 && bestSnap.worldTick > 0) {
+                        const uintptr_t gv = ResolveGlobalVars(g_state.clientBase.load());
+                        const float simTime = gv ? mem::ReadFast<float>(gv + 0x30) : 0.0f;
+                        ext::Sample sample{};
+                        sample.valid = true;
+                        std::memcpy(sample.origin, &bestSnap.origin, 12);
+                        std::memcpy(sample.velocity, &bestSnap.velocity, 12);
+                        sample.worldTick = bestSnap.worldTick;
+                        sample.simTime = simTime;
+                        ext::FeedSample(bestSnap.pawn, bestSnap.origin, bestSnap.velocity,
+                                        bestSnap.worldTick, simTime);
+                        float extOrigin[3] = {0, 0, 0};
+                        if (ext::Extrapolate(bestSnap.pawn, sample, extOrigin)) {
+                            extrapApplied = true;
+                            const float hx = targetOrigin.x - bestSnap.origin.x;
+                            const float hy = targetOrigin.y - bestSnap.origin.y;
+                            const float hz = targetOrigin.z - bestSnap.origin.z;
+                            aimTarget = ent::Vector3{ extOrigin[0] + hx, extOrigin[1] + hy, extOrigin[2] + hz };
+                        }
+                    }
+                    // Обычный velocity-предиктор — только если экстраполяция
+                    // не применима (нет pawn/тика, дельта <= 0, резкий поворот).
+                    const bool usePrediction = !extrapApplied;
                     const float prediction = g_features.reverseAimPrediction.load();
-                    const ent::Vector3 target{ targetOrigin.x + targetVelocity.x * prediction,
-                                               targetOrigin.y + targetVelocity.y * prediction,
-                                               targetOrigin.z + targetVelocity.z * prediction };
+                    const ent::Vector3 target{ usePrediction
+                        ? ent::Vector3{ targetOrigin.x + targetVelocity.x * prediction,
+                                        targetOrigin.y + targetVelocity.y * prediction,
+                                        targetOrigin.z + targetVelocity.z * prediction }
+                        : aimTarget };
                     ent::Vector2 targetAngles = ent::CalcAngles(eye, target);
                     ent::NormalizeAngles(targetAngles.x, targetAngles.y);
                     // Silent: камера НЕ ДВИЖЕТСЯ, поэтому доводчик обязан
@@ -1415,11 +1539,26 @@ void RunFeatureLoop() {
         // интегрируется по реальному времени между проходами цикла.
         if (g_features.antiAimless.load()) {
             bool enemySpotted = false;
+            // LOS-гейт: спин ломаёт наш aim и раскрывает позицию, поэтому
+            // крутим только когда враг РЕАЛЬНО видит нас (trace с учётом
+            // пробок живыми игроками, до 3 penetration'ов — velocity).
+            const bool losGate = g_features.antiaimlessLos.load();
+            const ent::Vector3 eyeLos = losGate ? ent::GetEyePosition(localPlayer) : ent::Vector3{};
             ent::ForEachPlayer(entityList, [&](const ent::PlayerSnapshot& player) {
                 if (enemySpotted || player.pawn == localPlayer)
                     return;
-                if (player.team != 0 && player.team != localTeam && player.IsTargetable())
-                    enemySpotted = true;
+                if (player.team != 0 && player.team != localTeam && player.IsTargetable()) {
+                    if (!losGate) {
+                        enemySpotted = true;
+                        return;
+                    }
+                    const ent::Vector3 eEye = ent::GetEyePosition(player.pawn);
+                    if (eEye.x == 0.0f && eEye.y == 0.0f && eEye.z == 0.0f)
+                        return;
+                    const float s3[3] = { eyeLos.x, eyeLos.y, eyeLos.z };
+                    const float e3[3] = { eEye.x, eEye.y, eEye.z };
+                    enemySpotted = trace::IsVisible(s3, e3, player.pawn, localPlayer);
+                }
             });
 
             if (enemySpotted) {
@@ -1526,7 +1665,35 @@ void RunFeatureLoop() {
                 // controller -> текущий handle -> тот же живой pawn.
                 if (target.valid && targetPlayer && targetPlayer->IsTargetable()) {
                     const Vec3 eye = local.GetEyePos();
-                    const Vec3 aimPos = target.aimPos;
+                    Vec3 aimPos = target.aimPos;
+                    // Lagcomp-экстраполяция: сдвигаем резолвер-позицию на
+                    // дельту экстраполяции pawn'а до серверного тика.
+                    if (g_features.extrapolation.load()) {
+                        const uintptr_t tp = targetPlayer->GetPawn();
+                        const uintptr_t nodeT = mem::Read<uintptr_t>(tp + off.m_pGameSceneNode);
+                        if (nodeT) {
+                            const ent::Vector3 o = mem::Read<ent::Vector3>(nodeT + off.m_vecAbsOrigin);
+                            const ent::Vector3 v = mem::Read<ent::Vector3>(tp + off.m_vecAbsVelocity);
+                            const int wt = mem::Read<int>(tp + off.m_iWorldTick);
+                            if (o.x != 0.0f || o.y != 0.0f || o.z != 0.0f) {
+                                const uintptr_t gvT = ResolveGlobalVars(clientBase);
+                                const float simTimeT = gvT ? mem::ReadFast<float>(gvT + 0x30) : 0.0f;
+                                ext::Sample sT{};
+                                sT.valid = true;
+                                std::memcpy(sT.origin, &o, 12);
+                                std::memcpy(sT.velocity, &v, 12);
+                                sT.worldTick = wt;
+                                sT.simTime = simTimeT;
+                                ext::FeedSample(tp, o, v, wt, simTimeT);
+                                float eo[3] = {0, 0, 0};
+                                if (ext::Extrapolate(tp, sT, eo)) {
+                                    aimPos.x += eo[0] - o.x;
+                                    aimPos.y += eo[1] - o.y;
+                                    aimPos.z += eo[2] - o.z;
+                                }
+                            }
+                        }
+                    }
                     const Vec3 delta = {aimPos.x - eye.x, aimPos.y - eye.y, aimPos.z - eye.z};
                     const float horizontal = std::sqrtf(delta.x*delta.x + delta.y*delta.y);
                     const float dist = std::sqrtf(horizontal*horizontal + delta.z*delta.z);

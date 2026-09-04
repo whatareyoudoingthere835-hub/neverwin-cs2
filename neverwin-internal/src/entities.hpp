@@ -9,6 +9,7 @@
 // ============================================================================
 #include "memory.hpp"
 #include "offsets.hpp"
+#include "schema.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -235,6 +236,7 @@ namespace ent {
         bool immune = false;
         Vector3 origin{};
         Vector3 velocity{};
+        int worldTick = 0;   // m_iWorldTick — для extrapolation (lagcomp)
 
         bool HasController() const { return controller != 0; }
         bool HasPawn() const { return pawn != 0; }
@@ -272,19 +274,26 @@ namespace ent {
         if (!out.controller)
             return out;
 
-        const auto& off = offsets::g;
-        out.controllerAlive =
-            mem::Read<uint8_t>(out.controller + off.m_bPawnIsAlive) != 0;
+        // Schema-оффсеты runtime (имена стабильны), fallback на offsets::g.
+        // m_hPawn уже менялся (0x6BC -> 0x600) — жёсткие значения не вечны.
+        const uint32_t o_bPawnIsAlive =
+            SCHEMA_OFF("CCSPlayerController", "m_bPawnIsAlive"_hash, offsets::g.m_bPawnIsAlive);
+        const uint32_t o_hPlayerPawn =
+            SCHEMA_OFF("CCSPlayerController", "m_hPlayerPawn"_hash, offsets::g.m_hPlayerPawn);
+        const uint32_t o_hPawn =
+            SCHEMA_OFF("CBasePlayerController", "m_hPawn"_hash, offsets::g.m_hPawn);
+
+        out.controllerAlive = mem::Read<uint8_t>(out.controller + o_bPawnIsAlive) != 0;
 
         // m_hPlayerPawn из CCSPlayerController бывает пустым на живом
         // controller в актуальных клиентах. Базовый m_hPawn содержит ту же
         // связь и является корректным fallback, а не эвристикой по памяти.
-        out.pawnHandle = mem::Read<uint32_t>(out.controller + off.m_hPlayerPawn);
+        out.pawnHandle = mem::Read<uint32_t>(out.controller + o_hPlayerPawn);
         if (IsValidPlayerHandle(out.pawnHandle))
             out.pawn = GetEntityByHandle(entityList, out.pawnHandle);
 
         if (!out.pawn) {
-            const uint32_t basePawnHandle = mem::Read<uint32_t>(out.controller + off.m_hPawn);
+            const uint32_t basePawnHandle = mem::Read<uint32_t>(out.controller + o_hPawn);
             if (IsValidPlayerHandle(basePawnHandle)) {
                 out.pawnHandle = basePawnHandle;
                 out.pawn = GetEntityByHandle(entityList, out.pawnHandle);
@@ -293,15 +302,31 @@ namespace ent {
         if (!out.pawn)
             return out;
 
-        out.team = mem::Read<uint8_t>(out.pawn + off.m_iTeamNum);
-        out.health = mem::Read<int>(out.pawn + off.m_iHealth);
-        out.lifeState = mem::Read<uint8_t>(out.pawn + off.m_lifeState);
-        out.immune = mem::Read<uint8_t>(out.pawn + off.m_bGunGameImmunity) != 0;
-        out.velocity = mem::Read<Vector3>(out.pawn + off.m_vecAbsVelocity);
-        out.sceneNode = mem::Read<uintptr_t>(out.pawn + off.m_pGameSceneNode);
+        out.team = mem::Read<uint8_t>(
+            out.pawn + SCHEMA_OFF("C_BaseEntity", "m_iTeamNum"_hash, offsets::g.m_iTeamNum));
+        out.health = mem::Read<int>(
+            out.pawn + SCHEMA_OFF("C_BaseEntity", "m_iHealth"_hash, offsets::g.m_iHealth));
+        out.lifeState = mem::Read<uint8_t>(
+            out.pawn + SCHEMA_OFF("C_BaseEntity", "m_lifeState"_hash, offsets::g.m_lifeState));
+        out.immune = mem::Read<uint8_t>(
+            out.pawn + SCHEMA_OFF("C_BasePlayerPawn", "m_bGunGameImmunity"_hash,
+                                  offsets::g.m_bGunGameImmunity)) != 0;
+        out.velocity = mem::Read<Vector3>(
+            out.pawn + SCHEMA_OFF("C_BaseEntity", "m_vecVelocity"_hash,
+                                  offsets::g.m_vecAbsVelocity));
+        out.worldTick = mem::Read<int>(
+            out.pawn + SCHEMA_OFF("C_BaseEntity", "m_iWorldTick"_hash,
+                                  offsets::g.m_iWorldTick));
+        out.sceneNode = mem::Read<uintptr_t>(
+            out.pawn + SCHEMA_OFF("C_BaseEntity", "m_pGameSceneNode"_hash,
+                                  offsets::g.m_pGameSceneNode));
         if (out.sceneNode) {
-            out.dormant = mem::Read<uint8_t>(out.sceneNode + off.m_bDormant) != 0;
-            out.origin = mem::Read<Vector3>(out.sceneNode + off.m_vecAbsOrigin);
+            out.dormant = mem::Read<uint8_t>(
+                out.sceneNode + SCHEMA_OFF("CGameSceneNode", "m_bDormant"_hash,
+                                           offsets::g.m_bDormant)) != 0;
+            out.origin = mem::Read<Vector3>(
+                out.sceneNode + SCHEMA_OFF("CGameSceneNode", "m_vecAbsOrigin"_hash,
+                                           offsets::g.m_vecAbsOrigin));
         }
         return out;
     }
@@ -312,8 +337,10 @@ namespace ent {
     inline bool IsPawnAlive(uintptr_t pawn) {
         if (!pawn)
             return false;
-        const int health = mem::Read<int>(pawn + offsets::g.m_iHealth);
-        const uint8_t lifeState = mem::Read<uint8_t>(pawn + offsets::g.m_lifeState);
+        const int health = mem::Read<int>(pawn +
+            SCHEMA_OFF("C_BaseEntity", "m_iHealth"_hash, offsets::g.m_iHealth));
+        const uint8_t lifeState = mem::Read<uint8_t>(pawn +
+            SCHEMA_OFF("C_BaseEntity", "m_lifeState"_hash, offsets::g.m_lifeState));
         return health > 0 && health <= 1000 && lifeState == 0;
     }
 
@@ -327,14 +354,17 @@ namespace ent {
             return false;
 
         const auto& off = offsets::g;
-        if (mem::Read<uint8_t>(controller + off.m_bPawnIsAlive) == 0)
+        if (mem::Read<uint8_t>(controller +
+            SCHEMA_OFF("CCSPlayerController", "m_bPawnIsAlive"_hash, off.m_bPawnIsAlive)) == 0)
             return false;
 
-        uint32_t handle = mem::Read<uint32_t>(controller + off.m_hPlayerPawn);
+        uint32_t handle = mem::Read<uint32_t>(controller +
+            SCHEMA_OFF("CCSPlayerController", "m_hPlayerPawn"_hash, off.m_hPlayerPawn));
         uintptr_t resolved = IsValidPlayerHandle(handle)
             ? GetEntityByHandle(entityList, handle) : 0;
         if (resolved != expectedPawn) {
-            handle = mem::Read<uint32_t>(controller + off.m_hPawn);
+            handle = mem::Read<uint32_t>(controller +
+                SCHEMA_OFF("CBasePlayerController", "m_hPawn"_hash, off.m_hPawn));
             resolved = IsValidPlayerHandle(handle)
                 ? GetEntityByHandle(entityList, handle) : 0;
         }
@@ -402,15 +432,18 @@ namespace ent {
     // сетевой: при несовпадении билда/оффсета отдаёт не Vector, а мусор.
     inline Vector3 GetEyePosition(uintptr_t pawn) {
         Vector3 origin{};
-        const uintptr_t sceneNode = mem::Read<uintptr_t>(pawn + offsets::g.m_pGameSceneNode);
+        const uintptr_t sceneNode = mem::Read<uintptr_t>(pawn +
+            SCHEMA_OFF("C_BaseEntity", "m_pGameSceneNode"_hash, offsets::g.m_pGameSceneNode));
         if (sceneNode)
-            origin = mem::Read<Vector3>(sceneNode + offsets::g.m_vecAbsOrigin);
+            origin = mem::Read<Vector3>(sceneNode +
+                SCHEMA_OFF("CGameSceneNode", "m_vecAbsOrigin"_hash, offsets::g.m_vecAbsOrigin));
 
         // У живой модели глаза смещены ТОЛЬКО по Z (x/y ~ 0, z 45..68),
         // поэтому окна жёсткие: даже небольшой мусор (±10..50 юнитов) сдвигает
         // все углы аима на «несколько градусов» — симптом «наводится чуть мимо».
         // Старая отсечка ±100 такой мусор пропускала.
-        Vector3 viewOffset = mem::Read<Vector3>(pawn + offsets::g.m_vecViewOffset);
+        Vector3 viewOffset = mem::Read<Vector3>(pawn +
+            SCHEMA_OFF("C_BaseModelEntity", "m_vecViewOffset"_hash, offsets::g.m_vecViewOffset));
         if (!std::isfinite(viewOffset.x) || std::fabs(viewOffset.x) > 5.0f) viewOffset.x = 0.0f;
         if (!std::isfinite(viewOffset.y) || std::fabs(viewOffset.y) > 5.0f) viewOffset.y = 0.0f;
         if (!std::isfinite(viewOffset.z) || viewOffset.z < -20.0f || viewOffset.z > 80.0f) viewOffset.z = 64.0f;
@@ -420,7 +453,8 @@ namespace ent {
 
     // Команда pawn хранится как uint8_t.
     inline uint8_t GetTeam(uintptr_t pawn) {
-        return mem::Read<uint8_t>(pawn + offsets::g.m_iTeamNum);
+        return mem::Read<uint8_t>(pawn +
+            SCHEMA_OFF("C_BaseEntity", "m_iTeamNum"_hash, offsets::g.m_iTeamNum));
     }
 
     // Углы из точки A в точку B. Конвенция Source: pitch вверх отрицательный,

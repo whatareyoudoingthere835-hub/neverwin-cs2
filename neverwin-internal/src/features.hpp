@@ -21,7 +21,15 @@ struct Features {
     std::atomic<bool> silentAim{false};         // углы только в usercmd, камеру не трогаем
     std::atomic<bool> noSpread{false};          // компенсация спреда (aim + rage)
     std::atomic<float> reverseAimPrediction{0.15f}; // секунд вперёд по velocity цели
+    // Lagcomp-экстраполяция (velocity): симуляция цели до серверного тика
+    // (hull + гравитация + отскок от стен). Лечит «аим чуть позади головы»:
+    // сервер хитит по СВОЕЙ позиции, мы видим рендер-позицию с задержкой.
+    // При успехе обычный velocity-предиктор не применяется.
+    std::atomic<bool> extrapolation{true};
     std::atomic<bool> antiAimless{false};  // F2 — silent «в пол + спин» при видимом враге
+    // Спин F2 только при прямой видимости (trace с penetration'ами живых
+    // игроков): за стеной спин зря ломает свой aim и раскрывает позицию.
+    std::atomic<bool> antiaimlessLos{true};
     // Скорость спина F2 — ГРАДУСЫ В СЕКУНДУ (насколько быстро крутить),
     // а не «на сколько градусов за шаг». Время берётся из реальных миллисекунд.
     std::atomic<float> spinSpeed{720.0f};  // 10..3600 deg/s

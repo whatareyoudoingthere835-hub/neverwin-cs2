@@ -303,8 +303,79 @@ VEngineCvar007 (tier0.dll CreateInterface) → cvar «name» (linked-списо�
 Push-конфликты: сначала `git stash push -u`, `git rebase FETCH_HEAD`, при конфликтах `git checkout --theirs <наши файлы>` → add → `GIT_EDITOR=true git rebase --continue` → push. Не пушить force.
 Крупные файлы (dll/exe/zip) в репо — норма для этого проекта, так заведено.
 
+## 19. v83 — порт 123abc.zip (velocity-cs2) (2026-09-04)
+
+**Собрано и запушено: `release/neverwin_v83.dll`** (zig, §14b). Донор
+`123abc.zip` (velocity-cs2, «fixed» по словам других — НЕ прогонять слепую
+веру: все адреса/паттерны валидируются живым сканом + sanity-окнами).
+
+Новые модули (`neverwin-internal/src/`):
+1. **schema.hpp** — runtime Source2-schema: SchemaSystem_001 (CreateInterface-
+   registry, disp@ci+3), TypeScope vfunc13("client.dll"), класс vfunc2,
+   поля (count u16@info+0x24, array@0x30, stride 0x20, name@0, offset u32@0x10),
+   FNV-1a (seed 2166136261×16777619). `SCHEMA_OFF(class, "field"_hash, fallback)`
+   — статический кэш + ретраи 30×5 с (если SchemaSystem поднялся позже инжекта).
+   Имена полей стабильны — жёсткие оффсеты (m_hPawn 0x6BC→0x600!) теперь
+   вторичны. Вшито в entities.hpp: ReadPlayerSlot, IsPawnAlive,
+   IsPlayerStillAlive/Targetable, GetEyePosition, GetTeam (+ `worldTick`
+   = m_iWorldTick в PlayerSnapshot, fallback 0x3D8).
+2. **velocity.hpp** — 22 паттерна velocity-нотации (`?` wildcard, `>` rel-call,
+   `*` RIP-load, `+N/-N` пост-оффсет, `~` deref; `module:BYTES`): csgo_input,
+   entity_list, game_entity_system, local_player_controller, global_vars,
+   view_matrix, create_move(+28~=slot 5), handle_view_angles(+40~=slot 8),
+   get_usercmd, game_trace_manager, trace_ray/entity/filter_init/set_collision/hull,
+   compute_random_seed, weapon_calculate_spread, base_fire_guns, get_inaccuracy,
+   get_spread, prediction_seed/state. `velo::Update()` — скан 1 раз/5 с только
+   для недостающих. **Cvar-ридер**: VEngineCvar007 (tier0), FNV-хэш имени,
+   c_convar: value union @0x58 (fl/i32/i1/str), container walk (stride 0x10);
+   кэш найденных cvar + негатив-кэш 5 с.
+3. **tracing.hpp** — рейкасты: filter(0x48)/ray(0x30, type 2=hull)/result
+   (раскладка velocity), `MakeFilter` = trace_filter_init(skip, mask, layer, 7),
+   `TraceRay`/`TraceHull` = trace_ray(game_trace_manager, ...),
+   `TracePlayerBBox` = movement_services+1592, `IsVisible` — до 3
+   penetration'ов, живой игрок (hp 1..100) пропускает, frac>0.97 или hit==target.
+4. **extrapolation.hpp** — lagcomp (порт core/features/combat/impl/extrapolation):
+   server_tick = NetworkClientService_001 vfunc23() + 892; delta = server_tick −
+   m_iWorldTick (лимит 16 тиков, speed>0.1, смена направления по 2 сэмплам <35°);
+   пер тик: гравитация sv_gravity (он-граунд → z=0), hull-trace, wall-slide
+   (2 итерации), ground-check (луч 2 юнита вниз, normal.z>0.7). OBB через
+   m_pCollision (fallback ±16/72). История сэмплов (map pawn→2 сэмпла, лимит 32).
+5. **bhop.hpp** — предсказание приземления (порт bunnyhop.cpp): vel.z>0 → нет;
+   duck-adj (m_flDuckAmount, standing 72, origin.z −= diff/2, maxs.z=72);
+   mask = *(pawn+0xD48) (0 → default 0x1C3003), FL_DUCKING(0x10) → |=0x20;
+   make_player_movement_filter(pawn, mask, 11); vel.z −= gravityScale·sv_gravity·
+   dt/2; trace_player_bbox (end.z−=2); 0<frac<1 && normal.z≥sv_standable_normal;
+   frac=clamp(round(frac·64)/64, 1/64, 63/64). **Интеграция**: в CreateMove-
+   колбэке (bhop ON + SPACE в воздухе) пара subtick'ов release(f−1/64)+press(f)
+   в АБСОЛЮТНЫХ секундах (tickStart=f-curtime... = curtime−frametime) через
+   существующий `usercmd_apply::AddJumpSubtickPair` + ApplyButtons (CRC последним).
+   Старая «постфактум»-пара на тик приземления оставлена как fallback.
+
+Интеграция в features.cpp/gui.cpp:
+- **Extrapolation (lagcomp)** — чекбокс в Aim (def ON), raim: bestSnap из
+  FindTeammateTarget (новый аргумент `outBest`), Extrapolate → head-оффсет
+  переносится на экстраполированные ноги; ragebot: aimPos += Δ. При успехе
+  prediction-слайдер не применяется (при неудаче — обычный предиктор).
+- **Antiaimless LOS** — чекбокс «Spin only when visible (LOS)» в Misc (def ON):
+  спин только при trace::IsVisible(наши глаза → глаза врага, skip=наш pawn).
+- **Pattern-fallbacks** (dw-оффсеты текут первыми): localPlayer/localController
+  (velo local_player_controller), entityList (velo entity_list), globalVars
+  (ResolveGlobalVars), view matrix (gui, velo view_matrix — адрес матрицы
+  напрямую), CreateMove-хук (velo csgo_input → slot 5, иначе direct create_move).
+  Лог `velo: паттерн-таблица N/22`.
+
+**Логика проверок для пользователя (v83):** в логе `velo: <name> = 0x...`
+(каждый найденный паттерн), `velo: паттерн-таблица N/22`; экстраполяция
+включена по умолчанию — если аим стал «упережать» цель, гасить слайдером
+prediction (он больше не влияет при работающей экстраполяции) или чекбоксом.
+
 ## 17. Что делать дальше (по приоритету)
 
+0. **Боевые тесты v83**: extrapolation (движущаяся цель — аим на «месте
+   сервера», не позади), bhop subtick (лог `velobhop apply: protobuf buttons
+   applied`), F2-спин (за стеной крутиться НЕ должен при def-настройках),
+   schema (в логе нет `velo: ... не распарсен`, ESP/аим работают как раньше),
+   cvars (sv_gravity — в бход-логе fraction sane).
 1. **Боевые тесты v79**: silent aim (F1+Silent, камера стоит — пули должны лететь по цели), antiaimless (F2, «в пол+спин» в usercmd, скорость град/с), nospread (лог `nospread ready`?), ESP (диаг `esp:` в логе).
 2. **Silent aim промахи** (если будет): копать input_history (CSGOInputHistoryEntryPB, тоже в PB-хедерах) — сервер может брать углы оттуда; проверить, что CRC сервер реально принимает (symptom: ресинки/вылет «cheater detected»).
 3. **Bhop-стабильность**: подставить cmd+0x58 как arena-fallback в AcquireSubtickStep (в pbcmd::RecomputeMoveCrc кандидат cmd+0x58 уже добавлен) → если subtick-пара заработает, убрать «crc skipped».

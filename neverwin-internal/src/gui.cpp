@@ -7,6 +7,7 @@
 #include "memory.hpp"
 #include "entities.hpp"
 #include "offsets.hpp"
+#include "velocity.hpp"
 #include "assets/gui_icons.hpp"
 #include "assets/esp_icons.hpp"
 #include "assets/fa_solid.hpp"
@@ -331,8 +332,15 @@ namespace {
         }
 
         float matrix[16];
-        if (!mem::ReadArray<float>(clientBase + offsets::g.dwViewMatrix, matrix, 16))
-            return;
+        // dwViewMatrix может протечь при смене билда — pattern-fallback
+        // (velocity: адрес матрицы напрямую, без clientBase).
+        if (!mem::ReadArray<float>(clientBase + offsets::g.dwViewMatrix, matrix, 16) ||
+            !(std::isfinite(matrix[0]) && std::isfinite(matrix[15]) &&
+              (matrix[0] != 0.0f || matrix[1] != 0.0f))) {
+            if (!velo::Globals().viewMatrix ||
+                !mem::ReadArray<float>(velo::Globals().viewMatrix, matrix, 16))
+                return;
+        }
         // Здороовье view matrix: первая строка — единичный вектор камеры.
         // Если dwViewMatrix стух (обновили CS2 без ini), W2S проецирует в
         // мусор — боксы «не на игроках». Логируем один раз.
@@ -524,6 +532,12 @@ namespace {
             ImGui::TextDisabled("Warning: high update rates may cause lag.");
             float pred = g_features.reverseAimPrediction.load();
             if (ImGui::SliderFloat("Position prediction (s)", &pred, 0.f, .35f, "%.3f")) g_features.reverseAimPrediction.store(pred);
+            // Lagcomp (velocity): цель симулируется до серверного тика.
+            // Включён по умолчанию — он и есть фикс «аим позади головы».
+            bool ext = g_features.extrapolation.load();
+            if (ImGui::Checkbox("Extrapolation (lagcomp)", &ext)) g_features.extrapolation.store(ext);
+            if (ext)
+                ImGui::TextDisabled("When active it replaces the prediction slider.");
             bool trig = g_features.reverseAimTrigger.load();
             if (ImGui::Checkbox("Triggerbot", &trig)) g_features.reverseAimTrigger.store(trig);
             bool silent = g_features.silentAim.load();
@@ -580,6 +594,10 @@ namespace {
             bool aa = g_features.antiAimless.load();
             if (ImGui::Checkbox("Antiaimless [F2] (silent)", &aa)) g_features.antiAimless.store(aa);
             ImGui::TextDisabled("Silent: камера не двигается, «в пол + спин» идёт в usercmd.");
+            bool los = g_features.antiaimlessLos.load();
+            if (ImGui::Checkbox("Spin only when visible (LOS)", &los)) g_features.antiaimlessLos.store(los);
+            if (los)
+                ImGui::TextDisabled("Spin breaks your own aim; only spin on real line-of-sight.");
             // Скорость — ГРАДУСЫ В СЕКУНДУ (насколько быстро крутить),
             // интегрируется по времени; не «шаг за итерацию цикла».
             float spin = g_features.spinSpeed.load();

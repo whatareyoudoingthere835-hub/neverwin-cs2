@@ -50,6 +50,9 @@ namespace offsets {
         std::uintptr_t m_bWaitForNoAttack = 0x1C98; // запрет выстрела после смены/респавна
         std::uintptr_t m_bGunGameImmunity = 0x3268; // spawn protection
         std::uintptr_t m_iIDEntIndex       = 0x342C; // сущность под прицелом
+        // C_BaseEntity::m_iWorldTick — тик последней симуляции pawn.
+        // Главный путь — schema::Lookup (имя стабильно); fallback 0x3D8.
+        std::uintptr_t m_iWorldTick        = 0x3D8;
 
         // --- CCSPlayerController / CBasePlayerController ---
         // Единственный надёжный путь перечисления игроков:
