@@ -26,6 +26,17 @@ struct Features {
     // сервер хитит по СВОЕЙ позиции, мы видим рендер-позицию с задержкой.
     // При успехе обычный velocity-предиктор не применяется.
     std::atomic<bool> extrapolation{true};
+    // Silent lagcomp (velocity legit): наши silent-углы дописываются в
+    // input_history команды (render_tick = тик цели) — сервер берёт углы
+    // ВЫСТРЕЛА из истории, и пуля летит туда, куда наводились на тике цели.
+    // Без этого silent бьёт «позади» при любом лаге.
+    std::atomic<bool> silentLagcomp{true};
+    // --- Triggerbot (port velocity apply_triggerbot) ---
+    // Задержка после захвата цели под прицелом (мс) перед выстрелом.
+    std::atomic<int> triggerDelay{60};
+    // Спред-гейт: выстрел только если предсказанное направление пули
+    // (seed = f(углы,tick) → calculate_spread) попадает в конус цели.
+    std::atomic<bool> triggerSpreadGate{true};
     std::atomic<bool> antiAimless{false};  // F2 — silent «в пол + спин» при видимом враге
     // Спин F2 только при прямой видимости (trace с penetration'ами живых
     // игроков): за стеной спин зря ломает свой aim и раскрывает позицию.
@@ -42,6 +53,8 @@ struct Features {
     std::atomic<float> silentPitch{0.0f};
     std::atomic<float> silentYaw{0.0f};
     std::atomic<bool>  silentValid{false}; // есть ли свежий угол на этот тик
+    // Тик цели (m_iWorldTick) для input_history (silent lagcomp). -1 = нет.
+    std::atomic<int>   silentRecordTick{-1};
     std::atomic<bool> visualRecoil{false}; // F3 — отдача x4
     std::atomic<bool> bhop{false};         // F4 — обычный auto-bhop при удержании SPACE
     std::atomic<bool> extHope{false};      // ExtHope — спам кликов SPACE пока зажат X
@@ -55,6 +68,12 @@ struct Features {
     // — половина карты; теперь слайдер 25..400 м.
     std::atomic<float> espMaxDistance{10000.0f};
     std::atomic<bool> espTeammates{false}; // рисовать и своих (по умолчанию враги)
+    // Скелет (кости 0..25 из bone cache) — как в velocity player overlay.
+    std::atomic<bool> espSkeleton{true};
+    // Броня (m_ArmorValue через schema) справа от HP.
+    std::atomic<bool> espArmor{true};
+    // Ник (m_szName controller через schema) над боксом.
+    std::atomic<bool> espName{false};
     // Nonagon ragebot (F6)
     std::atomic<bool> ragebot{false};      // F6 — рейджбот с резолвером из nonagon
     std::atomic<bool> rageAutoFire{true};  // автоогонь/триггер после подтверждения живой цели

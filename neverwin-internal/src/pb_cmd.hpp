@@ -198,6 +198,91 @@ namespace pbcmd {
         return true;
     }
 
+    // --- Input history (lagcomp, port velocity legit.cpp apply_triggerbot) ---
+    // Сервер восстанавливает наш взгляд на МОМЕНТ выстрела из input_history:
+    // запись наших (silent) углов в каждый entry + render_tick = tick записи
+    // цели + attack1_start_history_index = size-1 делает так, что пуля летит
+    // туда, куда мы НАВЕЛИСЬ на тике цели (а не туда, куда смотрели N тиков
+    // назад). Без этого silent aim бьёт «позади» при любом лаге — тот самый
+    // симптом, который экстраполяция лечит только частично.
+    //
+    // Раскладка (impl = raw + 0x10, подтверждено нашей цепочкой base@cmd+0x40):
+    //   CSGOUserCmdPB inline в CUserCmd с +0x20:
+    //     +0x28 repeated input_history {arena, current@+0x30, total@+0x34, rep@+0x38}
+    //     +0x40 base* (наша верифицированная)
+    //     +0x4C attack1_start_history_index (i32)
+    //   entry impl: +0x08 view_angles*(raw), +0x10 cl_interp*, +0x18 sv_interp0*,
+    //     +0x20 sv_interp1*, +0x50 render_tick_count (i32),
+    //     +0x54 render_tick_fraction (f32)
+    //   msg_qangle impl: has_bits@0, x@8, y@C, z@10
+    //   interpolation_info impl: has_bits@0, frac@8, src@C, dst@10
+    inline bool WriteInputHistoryAngles(uintptr_t cmd, float pitch, float yaw, int recordTick) {
+        if (!cmd || !mem::IsValidPtr(reinterpret_cast<const void*>(cmd), 0x98))
+            return false;
+        const int size = *reinterpret_cast<const int*>(cmd + 0x30);
+        const uintptr_t rep = *reinterpret_cast<const uintptr_t*>(cmd + 0x38);
+        if (size <= 0 || size > 32 || !rep || !mem::IsValidPtr(reinterpret_cast<const void*>(rep), 16))
+            return false;
+
+        bool any = false;
+        for (int i = 0; i < size; ++i) {
+            const uintptr_t raw = *reinterpret_cast<const uintptr_t*>(rep + 8 + 8ull * i);
+            if (!raw)
+                continue;
+            const uintptr_t e = raw + kImplHeader;
+            if (!Valid(e, 0x68))
+                continue;
+
+            // view_angles (созданный игрой entry)
+            const uintptr_t vaRaw = *reinterpret_cast<const uintptr_t*>(e + 0x08);
+            if (vaRaw) {
+                const uintptr_t va = vaRaw + kImplHeader;
+                if (Valid(va, 0x14)) {
+                    *reinterpret_cast<uint32_t*>(e) |= 0x1u; // entry: has view_angles
+                    *reinterpret_cast<uint32_t*>(va) |= 0x7u; // x|y|z
+                    *reinterpret_cast<float*>(va + 0x08) = pitch;
+                    *reinterpret_cast<float*>(va + 0x0C) = yaw;
+                    *reinterpret_cast<float*>(va + 0x10) = 0.0f;
+                    any = true;
+                }
+            }
+
+            // render_tick: тик записи цели + 1 (velocity: tick + 1, frac 0)
+            *reinterpret_cast<int*>(e + 0x50) = recordTick + 1;
+            *reinterpret_cast<float*>(e + 0x54) = 0.0f;
+
+            // sv_interp0 / sv_interp1 — только если игра их создавала
+            for (int j = 0; j < 2; ++j) {
+                const uintptr_t ivRaw = *reinterpret_cast<const uintptr_t*>(e + 0x18 + 0x8 * j);
+                if (ivRaw) {
+                    const uintptr_t iv = ivRaw + kImplHeader;
+                    if (Valid(iv, 0x14)) {
+                        *reinterpret_cast<uint32_t*>(iv) |= 0x7u; // frac|src|dst
+                        *reinterpret_cast<float*>(iv + 0x08) = 0.0f;
+                        *reinterpret_cast<int*>(iv + 0x0C) = -1;
+                        *reinterpret_cast<int*>(iv + 0x10) = -1;
+                        any = true;
+                    }
+                }
+            }
+
+            // cl_interp — frac 0
+            const uintptr_t clRaw = *reinterpret_cast<const uintptr_t*>(e + 0x10);
+            if (clRaw) {
+                const uintptr_t cl = clRaw + kImplHeader;
+                if (Valid(cl, 0x10)) {
+                    *reinterpret_cast<uint32_t*>(cl) |= 0x1u; // frac
+                    *reinterpret_cast<float*>(cl + 0x08) = 0.0f;
+                    any = true;
+                }
+            }
+        }
+        if (!any)
+            return false;
+        *reinterpret_cast<int*>(cmd + 0x4C) = size - 1; // attack1_start_history_index
+        return true;
+    }
+
     // --- Subtick: acquire + пара jump release/press ---
     inline uintptr_t AcquireStep(uintptr_t field, uintptr_t arenaFallback,
                                  const usercmd_probe::Patterns& p) {

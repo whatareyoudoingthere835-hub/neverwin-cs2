@@ -93,6 +93,10 @@ namespace {
         const float y = g_features.silentYaw.load();
         if (!pbcmd::WriteViewAngles(runtime.command, p, y))
             return;
+        // Silent lagcomp: input_history получает те же углы + тик цели.
+        const int recTick = g_features.silentRecordTick.load();
+        if (g_features.silentLagcomp.load() && recTick > 0)
+            pbcmd::WriteInputHistoryAngles(runtime.command, p, y, recTick);
         pbcmd::RecomputeMoveCrc(runtime.command, g_userCmdPatterns);
         static bool logged = false;
         if (!logged) {
@@ -490,7 +494,7 @@ namespace {
     // Поэтому сначала ходим по ПОДТВЕРЖДЁННОЙ PB-цепочке
     // (InspectRuntime -> cmd -> CBaseUserCmdPB -> CMsgQAngle, + CRC), и только
     // если она недоступна — падаем в брютфорс raimv2.
-    bool WriteAnglesToUserCmd(uintptr_t clientBase, float pitch, float yaw) {
+    bool WriteAnglesToUserCmd(uintptr_t clientBase, float pitch, float yaw, int recordTick = -1) {
         const uintptr_t controller =
             mem::Read<uintptr_t>(clientBase + off.dwLocalPlayerController);
         if (controller && g_userCmdPatterns.ReadyForRead()) {
@@ -498,6 +502,10 @@ namespace {
             if (rt.command &&
                 mem::IsValidPtr(reinterpret_cast<const void*>(rt.command), 0x98) &&
                 pbcmd::WriteViewAngles(rt.command, pitch, yaw)) {
+                // Silent lagcomp: те же углы + тик цели в input_history —
+                // сервер хитит по НИМ на момент выстрела (velocity legit).
+                if (g_features.silentLagcomp.load() && recordTick > 0)
+                    pbcmd::WriteInputHistoryAngles(rt.command, pitch, yaw, recordTick);
                 pbcmd::RecomputeMoveCrc(rt.command, g_userCmdPatterns);
                 return true;
             }
@@ -1301,6 +1309,10 @@ void RunFeatureLoop() {
                     static float virtPitch = 0.0f, virtYaw = 0.0f;
                     static bool virtValid = false;
                     const bool silentNow = g_features.silentAim.load();
+                    // Тик цели для input_history (silent lagcomp): сервер
+                    // берёт углы выстрела из истории на этом тике.
+                    g_features.silentRecordTick.store(
+                        silentNow && bestSnap.HasPawn() ? bestSnap.worldTick : -1);
                     ent::Vector2 currentAngles;
                     if (silentNow) {
                         if (!virtValid) {
@@ -1369,7 +1381,8 @@ void RunFeatureLoop() {
                             g_features.silentValid.store(true);
                             silentOwner = 1;
                         } else {
-                            viaCmd = WriteAnglesToUserCmd(clientBase, angles.x, angles.y);
+                            viaCmd = WriteAnglesToUserCmd(clientBase, angles.x, angles.y,
+                                                         bestSnap.worldTick);
                             static uint32_t lastSilentWarn = 0;
                             const uint32_t nowS = GetTickCount();
                             if (nowS - lastSilentWarn > 5000) {
@@ -1395,21 +1408,128 @@ void RunFeatureLoop() {
                         }
                     }
 
-                    // Triggerbot обычного аимбота: стреляем только когда движок
-                    // сам подтвердил цель под прицелом (m_iIDEntIndex).
+                    // --- Triggerbot (port velocity apply_triggerbot) ---
+                    // Порядок гейтов как в velocity: 1) цель под прицелом
+                    // (движок подтвердил по m_iIDEntIndex), 2) LOS (trace с
+                    // пробоками живыми игроками — аналог penetration), 3)
+                    // спред-гейт (seed=f(углы,tick) → calculate_spread →
+                    // направление пули должно попасть в конус цели), 4) delay
+                    // после захвата, 5) random hold duration + release.
+                    // Старая версия кликала каждый проход при любом живом
+                    // pawn'е под прицелом — без команды/LOS/задержки.
                     if (g_features.reverseAimTrigger.load()) {
-                        const int idIndex = mem::Read<int>(localPlayer + off.m_iIDEntIndex);
-                        if (idIndex > 0) {
-                            const uintptr_t crosshairPawn = ent::GetEntityByIndex(entityList, static_cast<uint32_t>(idIndex));
-                            if (crosshairPawn && crosshairPawn != localPlayer &&
-                                ent::IsPawnAlive(crosshairPawn)) {
-                                INPUT shot{};
-                                shot.type = INPUT_MOUSE;
-                                shot.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-                                if (SendInput(1, &shot, sizeof(INPUT)) == 1) {
-                                    shot.mi.dwFlags = MOUSEEVENTF_LEFTUP;
-                                    SendInput(1, &shot, sizeof(INPUT));
+                        static uintptr_t trgPawn = 0;
+                        static DWORD trgStartAt = 0;
+                        static DWORD trgReleaseAt = 0;
+                        static bool trgDown = false;
+                        static std::mt19937 trgRng(GetTickCount());
+                        static std::uniform_int_distribution<int> trgHoldMs(40, 120);
+                        const DWORD trgNow = GetTickCount();
+
+                        if (trgDown) {
+                            if (trgNow >= trgReleaseAt) {
+                                INPUT up{};
+                                up.type = INPUT_MOUSE;
+                                up.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+                                SendInput(1, &up, sizeof(INPUT));
+                                trgDown = false;
+                                trgPawn = 0;
+                            }
+                        } else {
+                            const int idIndex = mem::Read<int>(localPlayer + off.m_iIDEntIndex);
+                            uintptr_t cp = 0;
+                            if (idIndex > 0)
+                                cp = ent::GetEntityByIndex(entityList, static_cast<uint32_t>(idIndex));
+                            const bool target = cp != 0 && cp != localPlayer &&
+                                ent::IsPawnAlive(cp) &&
+                                mem::Read<uint8_t>(cp + off.m_bGunGameImmunity) == 0;
+
+                            if (target) {
+                                const ent::Vector3 sEye = ent::GetEyePosition(localPlayer);
+                                const ent::Vector3 tHead = ent::GetEyePosition(cp);
+                                const float s3[3] = { sEye.x, sEye.y, sEye.z };
+                                const float t3[3] = { tHead.x, tHead.y, tHead.z };
+                                const bool los = trace::IsVisible(s3, t3, cp, localPlayer);
+
+                                // Спред-гейт: предсказанное направление пули.
+                                bool spreadOk = true;
+                                if (g_features.triggerSpreadGate.load() && los &&
+                                    g_userCmdPatterns.ReadyForNoSpread() && localController) {
+                                    const uint32_t tBase = static_cast<uint32_t>(
+                                        mem::Read<int>(localController + off.m_nTickBase));
+                                    const auto rtT = usercmd_probe::InspectRuntime(
+                                        localController, g_userCmdPatterns);
+                                    float cmdP = 0.0f, cmdY = 0.0f;
+                                    if (tBase > 0 && rtT.command &&
+                                        pbcmd::ReadViewAngles(rtT.command, cmdP, cmdY)) {
+                                        // Реальный spread текущего оружия (vdata).
+                                        float wSpread = 0.01f;
+                                        int16_t wDef = 0;
+                                        const uintptr_t wsvcT = mem::Read<uintptr_t>(localPlayer + off.m_pWeaponServices);
+                                        const uint32_t whT = wsvcT ? mem::Read<uint32_t>(wsvcT + off.m_hActiveWeapon) : 0;
+                                        const uintptr_t wepT = whT ? ent::GetEntityByHandle(entityList, whT) : 0;
+                                        const uintptr_t vdataT = wepT ? mem::Read<uintptr_t>(wepT + off.m_pWeaponVData) : 0;
+                                        if (vdataT) {
+                                            wDef = mem::Read<int16_t>(vdataT + 0x1BA);
+                                            const float vs = mem::Read<float>(vdataT + off.m_flSpread);
+                                            if (vs > 0.0f) wSpread = vs;
+                                        }
+                                        const uint32_t seed = nospread::ComputeSeed(
+                                            localPlayer, cmdP, cmdY, tBase,
+                                            g_userCmdPatterns.computeRandomSeed);
+                                        float sx = 0.0f, sy = 0.0f;
+                                        if (seed != 0 && nospread::CalcSpread(
+                                                g_userCmdPatterns.calculateSpread,
+                                                wDef, seed, 0.01f, wSpread, sx, sy)) {
+                                            // angle_vectors (Source): left/up-база.
+                                            const float pR = cmdP * 0.0174532925f;
+                                            const float yR = cmdY * 0.0174532925f;
+                                            const float cP = std::cosf(pR), sP = std::sinf(pR);
+                                            const float cY = std::cosf(yR), sY = std::sinf(yR);
+                                            float bdx = cP * cY - cP * sY * sx - sP * cY * sy;
+                                            float bdy = cP * sY + cP * cY * sx - sP * sY * sy;
+                                            float bdz = sP + cP * sy;
+                                            const float blen = std::sqrtf(bdx*bdx + bdy*bdy + bdz*bdz);
+                                            const float ddx = tHead.x - sEye.x;
+                                            const float ddy = tHead.y - sEye.y;
+                                            const float ddz = tHead.z - sEye.z;
+                                            const float dlen = std::sqrtf(ddx*ddx + ddy*ddy + ddz*ddz);
+                                            if (blen > 0.01f && dlen > 1.0f) {
+                                                const float dot = (bdx*ddx + bdy*ddy + bdz*ddz) / (blen * dlen);
+                                                const float ang = std::acosf(std::min(1.0f, std::max(-1.0f, dot))) * 57.29577951308232f;
+                                                spreadOk = ang < 2.5f; // конус по голове/корпусу
+                                            }
+                                        }
+                                    }
                                 }
+
+                                if (los && spreadOk) {
+                                    if (trgPawn != cp) {
+                                        trgPawn = cp;
+                                        trgStartAt = trgNow;
+                                    }
+                                    if (trgNow - trgStartAt >=
+                                        static_cast<DWORD>(std::max(0, g_features.triggerDelay.load()))) {
+                                        INPUT down{};
+                                        down.type = INPUT_MOUSE;
+                                        down.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+                                        if (SendInput(1, &down, sizeof(INPUT)) == 1) {
+                                            trgDown = true;
+                                            trgReleaseAt = trgNow + static_cast<DWORD>(trgHoldMs(trgRng));
+                                            trgPawn = 0;
+                                            static bool tLogged = false;
+                                            if (!tLogged) {
+                                                tLogged = true;
+                                                NW_LOG(L"triggerbot: нормальный режим (crosshair + LOS + спред-гейт + delay %d ms + random hold).",
+                                                       g_features.triggerDelay.load());
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    trgPawn = 0;
+                                }
+                            } else {
+                                trgPawn = 0;
                             }
                         }
                     }
@@ -1581,6 +1701,7 @@ void RunFeatureLoop() {
                     g_features.silentPitch.store(floorPitch);
                     g_features.silentYaw.store(spinYaw);
                     g_features.silentValid.store(true);
+                    g_features.silentRecordTick.store(-1); // у F2 нет цели
                     silentOwner = 2;
                     static bool logged = false;
                     if (!logged) {
@@ -1728,8 +1849,11 @@ void RunFeatureLoop() {
                         }
 
                         bool viaCmd = false;
-                        if (g_features.resolver.load())
-                            viaCmd = WriteAnglesToUserCmd(clientBase, pitch, yaw);
+                        if (g_features.resolver.load()) {
+                            const int rageTick = mem::Read<int>(
+                                targetPlayer->GetPawn() + off.m_iWorldTick);
+                            viaCmd = WriteAnglesToUserCmd(clientBase, pitch, yaw, rageTick);
+                        }
 
                         bool aimApplied = viaCmd;
                         if (!viaCmd) {

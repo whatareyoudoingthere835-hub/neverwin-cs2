@@ -273,6 +273,8 @@ namespace {
             ent::Vector3 head, feet;
             int health;
             float distance;
+            uintptr_t pawn = 0;       // для скелета/брони
+            uintptr_t controller = 0; // для ника (m_sSanitizedPlayerName)
         };
         static std::vector<EspTarget> cache;
         static std::chrono::steady_clock::time_point lastScan{};
@@ -305,10 +307,14 @@ namespace {
                         ++tooFar;
                         return;
                     }
-                    cache.push_back({ { player.origin.x, player.origin.y, player.origin.z + 72.0f },
-                                      player.origin,
-                                      player.health,
-                                      dist });
+                    EspTarget t;
+                    t.head = { player.origin.x, player.origin.y, player.origin.z + 72.0f };
+                    t.feet = player.origin;
+                    t.health = player.health;
+                    t.distance = dist;
+                    t.pawn = player.pawn;
+                    t.controller = player.controller;
+                    cache.push_back(t);
                 });
                 diagEnemies = enemies;
                 diagTooFar = tooFar;
@@ -384,6 +390,68 @@ namespace {
                 char distText[32];
                 snprintf(distText, sizeof(distText), "%.0fm", target.distance / 52.49f);
                 draw->AddText({left, bottom.y + 2.0f}, IM_COL32(255, 255, 255, 200), distText);
+            }
+
+            // --- Скелет (velocity player overlay, bone ids из CS2): ---
+            // spine: head7 neck6 spine4=23 spine3=4 spine2=3 spine1=2 pelvis1
+            // L arm: hand11 elbow10 shoulder9 clavicle8 spine4
+            // R arm: hand15 elbow14 shoulder13 clavicle12 spine4
+            // L leg: foot19 knee18 hip17 pelvis1   R leg: foot22 knee21 hip20 pelvis1
+            if (g_features.espSkeleton.load() && target.pawn) {
+                static const int chains[][7] = {
+                    { 7, 6, 23, 4, 3, 2, 1 },   // spine (6 пар)
+                    { 11, 10, 9, 8, 23 },       // L arm
+                    { 15, 14, 13, 12, 23 },     // R arm
+                    { 19, 18, 17, 1 },          // L leg
+                    { 22, 21, 20, 1 },          // R leg
+                };
+                static const int chainLen[] = { 7, 5, 5, 4, 4 };
+                const ImU32 skelCol = IM_COL32(255, 255, 255, 190);
+                for (int c = 0; c < 5; ++c) {
+                    ImVec2 prev;
+                    bool havePrev = false;
+                    for (int i = 0; i < chainLen[c]; ++i) {
+                        ent::Vector3 bp{};
+                        if (!ent::GetBonePosition(target.pawn, chains[c][i], bp)) {
+                            havePrev = false;
+                            continue;
+                        }
+                        ImVec2 sp;
+                        if (!WorldToScreen(bp, sp, matrix, width, height)) {
+                            havePrev = false;
+                            continue;
+                        }
+                        if (havePrev)
+                            draw->AddLine(prev, sp, skelCol, 1.2f);
+                        prev = sp;
+                        havePrev = true;
+                    }
+                }
+            }
+
+            // --- Броня (m_ArmorValue через schema, как в velocity rage) ---
+            if (g_features.espArmor.load() && target.pawn) {
+                const int armor = mem::Read<int>(target.pawn +
+                    SCHEMA_OFF("C_CSPlayerPawn", "m_ArmorValue"_hash, 0));
+                if (armor > 0) {
+                    char armorText[16];
+                    snprintf(armorText, sizeof(armorText), "A%d", armor);
+                    draw->AddText({right + 3.0f, bottom.y + 2.0f},
+                                  IM_COL32(140, 190, 255, 220), armorText);
+                }
+            }
+
+            // --- Ник (m_sSanitizedPlayerName через schema) ---
+            if (g_features.espName.load() && target.controller) {
+                const uintptr_t namePtr = mem::Read<uintptr_t>(target.controller +
+                    SCHEMA_OFF("CCSPlayerController", "m_sSanitizedPlayerName"_hash, 0));
+                if (namePtr && mem::IsValidPtr(reinterpret_cast<const void*>(namePtr), 64)) {
+                    char nameBuf[96]{};
+                    const auto* nm = reinterpret_cast<const char*>(namePtr);
+                    for (int i = 0; i < 95 && nm[i]; ++i) nameBuf[i] = nm[i];
+                    if (nameBuf[0])
+                        draw->AddText({left, top.y - 14.0f}, IM_COL32(255, 255, 255, 210), nameBuf);
+                }
             }
         }
     }
@@ -540,8 +608,23 @@ namespace {
                 ImGui::TextDisabled("When active it replaces the prediction slider.");
             bool trig = g_features.reverseAimTrigger.load();
             if (ImGui::Checkbox("Triggerbot", &trig)) g_features.reverseAimTrigger.store(trig);
+            if (trig) {
+                ImGui::Indent(8.0f);
+                ImGui::TextDisabled("Proper (velocity): crosshair + LOS + spread gate.");
+                int td = g_features.triggerDelay.load();
+                if (ImGui::SliderInt("Trigger delay (ms)", &td, 0, 500)) g_features.triggerDelay.store(td);
+                bool sg = g_features.triggerSpreadGate.load();
+                if (ImGui::Checkbox("Spread gate (seed)", &sg)) g_features.triggerSpreadGate.store(sg);
+                if (sg)
+                    ImGui::TextDisabled("Shoot only when predicted bullet dir hits target.");
+                ImGui::Unindent(8.0f);
+            }
             bool silent = g_features.silentAim.load();
             if (ImGui::Checkbox("Silent aim (usercmd only)", &silent)) g_features.silentAim.store(silent);
+            bool sl = g_features.silentLagcomp.load();
+            if (ImGui::Checkbox("Silent lagcomp (input_history)", &sl)) g_features.silentLagcomp.store(sl);
+            if (sl)
+                ImGui::TextDisabled("Server takes shot angles from input_history at target tick.");
             bool ns = g_features.noSpread.load();
             if (ImGui::Checkbox("NoSpread (aim + rage)", &ns)) g_features.noSpread.store(ns);
         } else if (page == 2 || page == 3) {
@@ -580,6 +663,14 @@ namespace {
                 g_features.espMaxDistance.store(espDistM * 52.49f);
             bool tm = g_features.espTeammates.load();
             if (ImGui::Checkbox("ESP teammates", &tm)) g_features.espTeammates.store(tm);
+            // Velocity player overlay: скелет (кости из bone cache),
+            // броня (m_ArmorValue), ник (m_sSanitizedPlayerName).
+            bool skel = g_features.espSkeleton.load();
+            if (ImGui::Checkbox("ESP skeleton", &skel)) g_features.espSkeleton.store(skel);
+            bool arm = g_features.espArmor.load();
+            if (ImGui::Checkbox("ESP armor", &arm)) g_features.espArmor.store(arm);
+            bool nm = g_features.espName.load();
+            if (ImGui::Checkbox("ESP name", &nm)) g_features.espName.store(nm);
         } else if (page == 8) {
             // Indicators
             ImGui::TextColored(accent, "Indicators");

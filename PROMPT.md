@@ -369,20 +369,64 @@ Push-конфликты: сначала `git stash push -u`, `git rebase FETCH_H
 включена по умолчанию — если аим стал «упережать» цель, гасить слайдером
 prediction (он больше не влияет при работающей экстраполяции) или чекбоксом.
 
+## 20. v84 — silent aim (input_history), нормальный triggerbot, ESP+ (2026-09-04)
+
+**Собрано: `release/neverwin_v84.dll`.** Запрос: «при наличии фикшенного
+velocity сделай silent aim и ESP с нормальным триггерботом, и clantag».
+Clantag — уже эквивалентен донору (аним. тег [NeverWin]/[NW], cvar name,
+32-лимит) — не тронут.
+
+1. **Silent lagcomp (input_history)** — `pbcmd::WriteInputHistoryAngles`
+   (port velocity legit::apply_triggerbot). Сервер берёт углы ВЫСТРЕЛА из
+   input_history usercmd — запись наших silent-углов во все entries +
+   render_tick_count = worldTick цели + 1, sv_interp src/dst=-1, cl_frac=0,
+   attack1_start_history_index = size-1. Раскладка (impl=raw+0x10):
+   input_history field в CUserCmd@+0x28 {arena, current@+0x30, rep@+0x38},
+   attack1 index @+0x4C, entry: view_angles* @+0x08, cl_interp* @+0x10,
+   sv_interp0/1* @+0x18/0x20, render_tick_count @+0x50. CRC input_history
+   НЕ входит (move_crc = buttons+viewangles буфер, как в V16) — проверено
+   в бою: если silent вдруг перестанет работать — гасить чекбокс.
+   Флаг `silentLagcomp` (def ON); recordTick: raim→bestSnap.worldTick
+   (g_features.silentRecordTick для хук-пути; F2 сбрасывает в -1),
+   rage→m_iWorldTick цели.
+2. **Triggerbot «нормальный»** (замена старого клика-при-любом-pawn):
+   crosshair (m_iIDEntIndex) → alive+non-immune → **LOS** (trace::IsVisible,
+   пробоки живыми) → **спред-гейт** (seed=ComputeSeed(cmd-углы,tickBase) →
+   CalculateSpread → направление пули forward+left·sx+up·sy в конусе 2.5°
+   по голове; реальный spread из vdata) → **delay** (ms, def 60) → fire →
+   **random hold 40..120ms** → release. Лог один раз: `triggerbot:
+   нормальный режим`. Меню: «Trigger delay (ms)», «Spread gate (seed)».
+3. **ESP+ (velocity player overlay)**: скелет (5 цепей, bone ids:
+   spine 7-6-23-4-3-2-1, L arm 11-10-9-8-23, R arm 15-14-13-12-23,
+   L leg 19-18-17-1, R leg 22-21-20-1 — из bone cache, как у нас bone 7=head),
+   броня (C_CSPlayerPawn::m_ArmorValue через schema, «A<n>» справа),
+   ник (CCSPlayerController::m_sSanitizedPlayerName, над боксом).
+   Чекбоксы World/View: ESP skeleton (ON), ESP armor (ON), ESP name (OFF).
+
+**Тесты v84:** silent aim с задержкой (lag) — пули должны бить «по прицелу»,
+не позади; triggerbot — за стеной НЕ стреляет, delay виден; ESP — скелет/
+броня/ник рисуются на игроках (не в мусоре); если silent перестал работать
+после v84 — гасить «Silent lagcomp (input_history)» (CRC/input_history).
+
 ## 17. Что делать дальше (по приоритету)
 
-0. **Боевые тесты v83**: extrapolation (движущаяся цель — аим на «месте
+0. **Боевые тесты v84**: silent lagcomp (input_history) — при лаге пули бьют
+   по прицелу, а не позади; triggerbot (LOS+спред+delay); ESP скелет/броня/ник.
+   Если silent сломался — гасить «Silent lagcomp (input_history)».
+1. **Боевые тесты v83**: extrapolation (движущаяся цель — аим на «месте
    сервера», не позади), bhop subtick (лог `velobhop apply: protobuf buttons
    applied`), F2-спин (за стеной крутиться НЕ должен при def-настройках),
    schema (в логе нет `velo: ... не распарсен`, ESP/аим работают как раньше),
    cvars (sv_gravity — в бход-логе fraction sane).
-1. **Боевые тесты v79**: silent aim (F1+Silent, камера стоит — пули должны лететь по цели), antiaimless (F2, «в пол+спин» в usercmd, скорость град/с), nospread (лог `nospread ready`?), ESP (диаг `esp:` в логе).
-2. **Silent aim промахи** (если будет): копать input_history (CSGOInputHistoryEntryPB, тоже в PB-хедерах) — сервер может брать углы оттуда; проверить, что CRC сервер реально принимает (symptom: ресинки/вылет «cheater detected»).
-3. **Bhop-стабильность**: подставить cmd+0x58 как arena-fallback в AcquireSubtickStep (в pbcmd::RecomputeMoveCrc кандидат cmd+0x58 уже добавлен) → если subtick-пара заработает, убрать «crc skipped».
-4. **Entity layout**: если снова fallback после апдейта — stride-кандидаты 0x70/0x78/0x80 + m_hPawn offset (меняется!), потом Ghidra.
-5. NoSpread: динамический inaccuracy из weapon vdata (сейчас 0.01); при промахах — сверить сигнатуры с свежим patterns.json.
-6. Меню: Save → реальная сериализация конфига; Grenade Helper-вкладка если нужна.
-7. Автоперенос оффсетов: при апдейте CS2 — cs2-dumper → output.zip в ветку → diff dw-оффсетов → offsets.hpp+ini+сборка. dw-меняются ВСЕГДА, schema почти никогда; m_hPawn менялся (0x6BC→0x600) — проверять тоже. PATTERNS тоже меняются (NoSpread seed-пролог сменился 14177→14178!).
+2. **Боевые тесты v79**: silent aim (F1+Silent, камера стоит — пули должны лететь по цели), antiaimless (F2, «в пол+спин» в usercmd, скорость град/с), nospread (лог `nospread ready`?), ESP (диаг `esp:` в логе).
+3. **Silent aim промахи** (если будет): input_history уже дописан (v84, §20) —
+   дальше копить: penetration/autowall-режим trigger'а (donor shared::penetration),
+   hit-chance 256-сэмпли (donor calculate_hitchance), RCS-фактор (apply_rcs).
+4. **Bhop-стабильность**: подставить cmd+0x58 как arena-fallback в AcquireSubtickStep (в pbcmd::RecomputeMoveCrc кандидат cmd+0x58 уже добавлен) → если subtick-пара заработает, убрать «crc skipped».
+5. **Entity layout**: если снова fallback после апдейта — stride-кандидаты 0x70/0x78/0x80 + m_hPawn offset (меняется!), потом Ghidra.
+6. NoSpread: динамический inaccuracy из weapon vdata (сейчас 0.01); при промахах — сверить сигнатуры с свежим patterns.json.
+7. Меню: Save → реальная сериализация конфига; Grenade Helper-вкладка если нужна.
+8. Автоперенос оффсетов: при апдейте CS2 — cs2-dumper → output.zip в ветку → diff dw-оффсетов → offsets.hpp+ini+сборка. dw-меняются ВСЕГДА, schema почти никогда; m_hPawn менялся (0x6BC→0x600) — проверять тоже. PATTERNS тоже меняются (NoSpread seed-пролог сменился 14177→14178!).
 
 ## 18. v79 — что сделано (2026-09-03)
 
